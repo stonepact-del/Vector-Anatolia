@@ -24,17 +24,21 @@ flowchart LR
 - `persistence`: versioned local storage, validation and data export/import.
 - `ui` and application shell: contextual commands, briefing, report and panels.
 
+## Dataset replacement
+
+`createState(scenario, seed, density, duration, dataset)` accepts a validated provider dataset. The dataset supplies sector/navigation geometry, traffic families, performance profiles, separation values and scenario anchor configuration. All subsequent stepping, clearances and prediction read this snapshot. Tests run a dataset with renamed sector/fix identifiers and relocated coordinates, then reconstruct its replay without changing the engine. The bundled schematic artwork is explicitly specific to the original synthetic dataset; an authorized dataset integration must supply appropriate licensed display artwork or omit that backdrop.
+
 ## Ordering and replay
 
 One physics step is 250 ms. Commands are assigned the current integer tick and a sequence number. Accepted clearances have deterministic execution ticks. A step executes due clearances, advances all aircraft, applies scenario events, evaluates separation, updates periodic predictions and bookkeeping, and checks completion. Array order and seeded generator state are stable.
 
-The replay action log includes rejected attempts, controller-position changes and manual shift completion, not only accepted instructions. That distinction preserves history and metrics. Playback uses the same action and stepping functions. Sixty-second checkpoints reduce seek work. Stored identity and engine version protect against accidental incompatible playback.
+The replay action log includes rejected attempts, controller-position changes and manual shift completion, not only accepted instructions. That distinction preserves history and metrics. Playback uses the same action and stepping functions. Sixty-second checkpoints reduce seek work. Stored identity and engine version protect against accidental incompatible playback. The complete dataset snapshot travels with the initial state; playback validates it and checks final state/event hashes. A mismatched or altered recording is rejected.
 
 Rendering is driven independently by Pixi's ticker. Worker scheduling consumes a wall-time accumulator at the selected multiplier. Pause and browser visibility changes prevent background progression. Large wall-time stalls are clamped deliberately: the simulator slows under overload instead of skipping physics steps.
 
 ## Deployment and offline updates
 
-`npm run build` generates static `dist/` assets and a service worker with a content-derived cache name and an explicit precache list, including dynamically loaded renderer and worker chunks. Deployment may use a subdirectory because Vite uses relative asset paths. Serve over HTTPS (or localhost); file URLs do not provide worker/PWA guarantees. New service workers wait for old clients to close, avoiding asset replacement during a shift.
+`npm run build` generates static `dist/` assets and a service worker with a content-derived cache name and an explicit precache list, including dynamically loaded renderer and worker chunks. Deployment may use a subdirectory because Vite uses relative asset paths. Serve over HTTPS (or localhost); file URLs do not provide worker/PWA guarantees. New service workers wait for old clients to close, avoiding asset replacement during a shift. Cache lookup ignores `Vary` only for this unauthenticated immutable asset cache, so static hosts emitting `Vary: Origin` cannot break offline module/style retrieval. Navigation uses the cached application shell.
 
 ## Recovery
 

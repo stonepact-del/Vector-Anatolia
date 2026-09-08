@@ -17,7 +17,7 @@ Briefing is a scenario list with a concise operational description, density, dur
 - Muted blue-gray: surrounding traffic and secondary cartography.
 - System sans-serif for controls; monospace for flight data, clock and command entry.
 
-Flight labels show callsign, actual flight level, trend, cleared level and groundspeed in tens of knots. The inspector resolves detailed IAS/TAS-related information and ownership. Labels can be dragged, and automatic placement reduces overlaps. Target history and a one-minute velocity vector aid trend reading. Selected intent is emphasized; optional CPA details do not recommend a resolution.
+Flight labels show callsign, actual flight level, trend, cleared level and groundspeed in tens of knots. The inspector resolves detailed IAS/TAS-related information and ownership. Labels can be dragged, and automatic placement reduces overlaps. Network mode suppresses tutorial overlays and selected-route annotations to preserve sector-summary readability. Target history and a one-minute velocity vector aid trend reading. Selected intent is emphasized; optional CPA details do not recommend a resolution.
 
 ## Interaction and accessibility
 

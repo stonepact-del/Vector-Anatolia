@@ -12,7 +12,7 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from './domain/types';
-import { dataset } from './data';
+import { dataset as defaultDataset } from './data';
 import { Radar } from './rendering/Radar';
 import { parseCommand, validateCommand, verbs } from './simulation/commands';
 import { tutorialSteps } from './simulation/engine';
@@ -50,6 +50,7 @@ export default function App() {
     [error, setError] = useState(''),
     [replays, setReplays] = useState<Replay[]>([]),
     [replaying, setReplaying] = useState(false),
+    [replayLimit, setReplayLimit] = useState(0),
     [density, setDensity] = useState(1),
     [duration, setDuration] = useState(900),
     [seed, setSeed] = useState(2609),
@@ -58,8 +59,10 @@ export default function App() {
   const worker = useRef<Worker | null>(null),
     stateRef = useRef(state),
     commandInput = useRef<HTMLInputElement>(null),
+    pendingCommand = useRef<string | null>(null),
     saved = useRef(false),
     exportRequested = useRef(false);
+  const dataset = state?.dataset ?? defaultDataset;
   stateRef.current = state;
   const send = (m: WorkerRequest) => worker.current?.postMessage(m);
   const updateSettings = (next: Settings) => {
@@ -82,10 +85,22 @@ export default function App() {
       if (m.type === 'STATE') {
         setState(m.state);
         setReplaying(m.replaying);
+        setReplayLimit(m.replayFinalTick ?? 0);
+        if (pendingCommand.current) {
+          const history = m.state.aircraft
+            .flatMap((a) => a.history)
+            .find((h) => h.command.id === pendingCommand.current);
+          if (history && history.status !== 'QUEUED') {
+            setMessage(history.message);
+            pendingCommand.current = null;
+          }
+        }
       }
       if (m.type === 'ERROR') setError(m.message);
-      if (m.type === 'RESULT')
+      if (m.type === 'RESULT') {
+        if (m.result.ok) pendingCommand.current = m.result.command.id;
         setMessage(m.result.ok ? 'Clearance queued · awaiting response' : m.result.error);
+      }
       if (m.type === 'REPLAY_DATA') {
         saveReplay(m.replay)
           .then(() => getReplays().then(setReplays))
@@ -111,14 +126,21 @@ export default function App() {
     if (state?.complete && !saved.current && !replaying) {
       saved.current = true;
       send({ type: 'EXPORT_REPLAY' });
+      const earned =
+        state.metrics.losses === 0 &&
+        (state.scenario.tutorial
+          ? state.tutorialStep === 5
+          : state.clock.tick * 0.25 >= state.scenario.durationSec);
       const next = {
         ...settings,
-        completed: [...new Set([...settings.completed, state.scenario.id])],
+        completed: earned
+          ? [...new Set([...settings.completed, state.scenario.id])]
+          : settings.completed,
         bests: {
           ...settings.bests,
           [state.scenario.id]: Math.max(
             settings.bests[state.scenario.id] ?? 0,
-            state.metrics.handled,
+            state.metrics.losses === 0 ? state.metrics.handled : 0,
           ),
         },
       };
@@ -127,8 +149,9 @@ export default function App() {
   }, [state?.complete]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      if (modal) return;
       if ((e.target as HTMLElement).matches('input,select,textarea')) return;
-      if (e.key === ' ' && state) {
+      if (e.key === ' ' && state && !(e.target as HTMLElement).closest('button,a')) {
         e.preventDefault();
         send({ type: 'PAUSE' });
       }
@@ -148,7 +171,7 @@ export default function App() {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [state, selected]);
+  }, [state, selected, modal]);
   useEffect(() => {
     if (!modal) return;
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
@@ -190,7 +213,7 @@ export default function App() {
       : 'Select an aircraft';
   const start = () => {
     if (!Number.isInteger(seed)) {
-      setMessage('Seed must be a whole number.');
+      setError('Seed must be a whole number.');
       return;
     }
     saved.current = false;
@@ -365,7 +388,7 @@ export default function App() {
                   </span>
                 )}
               </div>
-              {state.scenario.tutorial && (
+              {state.scenario.tutorial && !network && (
                 <div className="tutorial">
                   <span className="eyebrow">
                     GUIDED SESSION · {Math.min(state.tutorialStep + 1, 6)} / 6
@@ -382,7 +405,7 @@ export default function App() {
                   </button>
                 </div>
               )}
-              {network && (
+              {network && !replaying && (
                 <div className="network-picker">
                   <span className="eyebrow">TAKE POSITION / COMBINE</span>
                   {dataset.sectors.map((sec) => (
@@ -410,9 +433,15 @@ export default function App() {
                 <span>
                   SHIFT {time(state.clock.tick * 0.25)} / {time(state.scenario.durationSec)}
                 </span>
-                <button className="text-button" onClick={() => send({ type: 'FINISH' })}>
-                  END SHIFT ↗
-                </button>
+                {replaying ? (
+                  <button className="text-button" onClick={() => openModal('replays')}>
+                    REPLAY LIBRARY ↗
+                  </button>
+                ) : (
+                  <button className="text-button" onClick={() => send({ type: 'FINISH' })}>
+                    END SHIFT ↗
+                  </button>
+                )}
               </div>
             </div>
             {inspector && (
@@ -470,6 +499,7 @@ export default function App() {
           )}
           {a && !replaying && (
             <CommandStrip
+              data={dataset}
               a={a}
               commandTab={commandTab}
               setCommandTab={setCommandTab}
@@ -517,10 +547,7 @@ export default function App() {
                 aria-label="Replay seek"
                 type="range"
                 min={0}
-                max={
-                  replays.find((r) => r.seed === state.seed && r.scenario.id === state.scenario.id)
-                    ?.finalTick ?? state.scenario.durationSec * 4
-                }
+                max={replayLimit}
                 value={state.clock.tick}
                 onChange={(e) => send({ type: 'SEEK', tick: Number(e.target.value) })}
               />
@@ -640,8 +667,8 @@ export default function App() {
                         const file = e.target.files?.[0];
                         if (!file) return;
                         try {
-                          if (file.size > 20_000_000)
-                            throw Error('Import is too large (20 MB maximum).');
+                          if (file.size > 134_217_728)
+                            throw Error('Import is too large (128 MiB maximum).');
                           await importLocal(JSON.parse(await file.text()));
                           setSettings(await getSettings());
                           setReplays(await getReplays());

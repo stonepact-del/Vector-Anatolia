@@ -30,7 +30,7 @@ Initial traffic is checked for a separated entry slot. A flight that cannot be p
 
 Horizontal infringement is strictly less than 5 NM. Vertical infringement is strictly below the applicable modeled minimum: 1,000 ft below FL290, 1,000 ft for eligible RVSM pairs wholly within FL290–410, otherwise 2,000 ft. Mixed band pairs receive the conservative larger requirement. Current trajectories are swept between physics ticks, preventing an endpoint-only missed crossing.
 
-Prediction advances cloned aircraft with the same 250 ms motion model and accepted queued intents, sampling relative segments every five seconds over a five-minute horizon. Swept segment checks estimate first infringement and closest approach. A conservative 120-NM spatial grid, maximum-reach pruning and swept trajectory bounds reduce candidate pairs; tests compare optimized results against an unfiltered oracle.
+Prediction advances cloned aircraft with the same 250 ms motion model and accepted queued intents, sampling relative segments every five seconds over a five-minute horizon. Swept segment checks estimate first infringement and closest approach. A conservative spatial grid sized from maximum modeled reach, followed by distance pruning and swept trajectory bounds reduce candidate pairs; tests compare optimized results against an unfiltered oracle.
 
 STCA is a separate modeled 120-second horizon. Alert episodes are counted at onset, not every tick. Prediction is conditional on current intent; unissued future controller actions, future abnormal events and future traffic spawns are not known to it. Five-second trajectory segments approximate continuously turning paths. No automatic conflict-resolution recommendation is offered.
 
@@ -40,11 +40,11 @@ Shift safety metrics concern aircraft in or owned by the player's selected/combi
 
 All scenarios use a dated 27 November 2025 calendar. The modeled FRA window crosses UTC midnight, includes 20:00, and excludes 02:00. Vertical eligibility includes FL305 and FL660, while individual aircraft ceilings still apply. New eligible traffic in Night FRA can file simplified direct segments once activation occurs. Existing aircraft retain their accepted route unless cleared otherwise.
 
-Routes require known synthetic designated points and validate interior constraints against the rectangular synthetic network. Entry/exit connection handling is a documented approximation. Actual FRATURK points, route availability, equipment specifications, military eligibility, terminal connecting restrictions and full RAD constraints are not reproduced.
+Routes enforce synthetic entry/exit/intermediate point roles, activation effective date, and interior constraints against the rectangular synthetic network. Entry/exit connection handling is a documented approximation. Actual FRATURK points, route availability, equipment specifications, military eligibility, terminal connecting restrictions and full RAD constraints are not reproduced.
 
 ## Abnormalities and weather
 
-Communication failure retains last accepted intent and blocks radio clearance execution. Medical urgency changes the requested destination to LTAC and requests routing through synthetic SIMCB plus a lower level; player commands execute the diversion. Cells move procedurally and generate deviation requests when traffic approaches. A direct clearance in response records the modeled route response. No pilot emergency checklist is provided. Minimum fuel and fuel emergency are distinct domain states; the shipped abnormal missions are communication failure and medical diversion.
+Communication failure retains last accepted intent and blocks radio clearance execution. Medical urgency changes the requested destination to LTAC and requests routing through synthetic SIMCB plus a lower level; player commands execute the diversion. Cells move procedurally and generate deviation requests when traffic approaches. A direct clearance acknowledges the route response, but a weather abnormal remains unresolved until the aircraft is outside the cell margin. A medical diversion requires routing toward the requested diversion fix and a compatible lower cleared level. No pilot emergency checklist is provided. Minimum fuel and fuel emergency are distinct domain states; the shipped abnormal missions are communication failure and medical diversion.
 
 ## Workload and report
 
@@ -65,3 +65,5 @@ This is not a DHMİ workload model. Any separation loss produces NOT PASSED rega
 A 300-aircraft engine benchmark is included in `tests/performance.test.ts`. On this container, optimization reduced a five-minute forecast from approximately 1.8 seconds to approximately 0.5 seconds; a one-simulation-second advance with prediction took approximately 0.55 seconds in that run. Timings depend on host load. The worker keeps this work off the UI thread, but 300 aircraft at 4× is not a guaranteed real-time target. Shipped scenarios use substantially lower traffic counts.
 
 Renderer geometry and label content are rebuilt on state/view changes rather than every display frame. PixiJS draws the retained scene independently. Screenshot verification uses software-rendered Chromium in this environment; native GPU performance will differ.
+
+Scenario progression requires a safe full shift, or completion of all guided tutorial actions. Ending an unfinished shift still produces a report/replay but does not unlock the next scenario. Practice mode makes all content available without changing procedures.

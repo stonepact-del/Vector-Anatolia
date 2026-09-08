@@ -5,6 +5,11 @@ test('production precaches every gameplay dependency and runs offline', async ({
 }) => {
   const external: string[] = [];
   const errors: string[] = [];
+  const failures: string[] = [];
+  page.on('requestfailed', (r) => failures.push(`${r.url()} ${r.failure()?.errorText}`));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
   page.on('request', (r) => {
     if (
       !r.url().startsWith('http://127.0.0.1:4174') &&
@@ -22,7 +27,25 @@ test('production precaches every gameplay dependency and runs offline', async ({
   await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('button', { name: 'BEGIN GUIDED SESSION' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'BEGIN GUIDED SESSION' }))
+    .toBeVisible()
+    .catch(async (error) => {
+      console.log({
+        errors,
+        failures,
+        html: await page.content(),
+        cache: await page.evaluate(async () => {
+          const keys = await caches.keys();
+          return Promise.all(
+            keys.map(async (k) => ({
+              key: k,
+              requests: (await (await caches.open(k)).keys()).map((r) => r.url),
+            })),
+          );
+        }),
+      });
+      throw error;
+    });
   await page.getByRole('button', { name: 'BEGIN GUIDED SESSION' }).click();
   await expect(page.locator('canvas')).toBeVisible();
   await expect(page.locator('.clock strong')).not.toHaveText('12:00:00');

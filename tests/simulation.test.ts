@@ -372,3 +372,68 @@ describe('replay and scenario determinism', () => {
     },
   );
 });
+
+import { nextSectorAlongIntent } from '../src/simulation/airspace';
+it('reports the first crossing sector on a long direct route', () => {
+  const { s, a } = controlled();
+  a.position = { x: 250, y: 95 };
+  a.routeIntent = ['SIMEA'];
+  a.nextWaypoint = 0;
+  expect(nextSectorAlongIntent(a, dataset)).toBe('S3');
+  changeSector(s, 'S3');
+  expect(a.communication).toBe('OTHER');
+});
+it('does not resolve weather merely by issuing a direct clearance into the cell', () => {
+  const { s, a } = controlled();
+  s.weather = [{ id: 'WX', ...a.position, radiusNm: 30, intensity: 1, drift: { x: 0, y: 0 } }];
+  a.emergency = {
+    kind: 'WEATHER',
+    declaredTick: s.clock.tick,
+    acknowledged: false,
+    resolved: false,
+  };
+  issueCommand(s, { callsign: a.callsign, kind: 'DIRECT', value: 'SIMCA' });
+  ticks(s, 12);
+  expect(a.emergency.acknowledged).toBe(true);
+  expect(a.emergency.resolved).toBe(false);
+});
+
+it('uses replaceable separation parameters in both detection and prediction', () => {
+  const s = createState(),
+    [a, b] = s.aircraft;
+  const data = structuredClone(dataset);
+  data.separation.horizontalNm = 10;
+  a.position = { x: 100, y: 100 };
+  b.position = { x: 108, y: 100 };
+  a.altitudeFt = b.altitudeFt = a.clearedAltitudeFt = b.clearedAltitudeFt = 35000;
+  expect(separated(a, b)).toBe(true);
+  expect(separated(a, b, data.separation)).toBe(false);
+  const alerts = predictConflicts([a, b], data);
+  expect(alerts[0].actual).toBe(true);
+  expect(predictConflicts([a, b], data, false)).toEqual(alerts);
+});
+
+it('FRA respects effective date and daytime activation windows', () => {
+  const d = structuredClone(dataset);
+  d.fra.startHour = 8;
+  d.fra.endHour = 18;
+  expect(fraActive(Date.UTC(2025, 10, 26, 10), 35000, d)).toBe(false);
+  expect(fraActive(Date.UTC(2025, 10, 27, 8), 35000, d)).toBe(true);
+  expect(fraActive(Date.UTC(2025, 10, 27, 18), 35000, d)).toBe(false);
+  expect(fraActive(Date.UTC(2025, 10, 27, 2), 35000, d)).toBe(false);
+});
+it('FRA validates point roles as well as identifiers', () => {
+  const a = createState().aircraft[0],
+    route = { ...a.flightPlan.route, waypoints: ['SIMLA', 'SIMEA'] };
+  expect(validateFraRoute(route, a, dataset, Date.UTC(2025, 10, 27, 21))).toContain('entry');
+});
+it('accepting a radio-failure aircraft cannot restore communication', () => {
+  const s = createState(),
+    a = s.aircraft[0];
+  a.communication = 'FAILED';
+  a.emergency = { kind: 'COMMS', declaredTick: 0, acknowledged: false, resolved: false };
+  issueCommand(s, { callsign: a.callsign, kind: 'ACCEPT' });
+  step(s);
+  expect(a.owner).toBe('S2');
+  expect(a.communication).toBe('FAILED');
+});

@@ -1,6 +1,7 @@
-import type { Aircraft, CommandIntent } from '../domain/types';
-import { dataset, performance } from '../data';
+import type { Aircraft, CommandIntent, AIRACDataset } from '../domain/types';
+import { performance } from '../data';
 export function CommandStrip({
+  data,
   a,
   commandTab,
   setCommandTab,
@@ -9,6 +10,7 @@ export function CommandStrip({
   onWhy,
   onDeselect,
 }: {
+  data: AIRACDataset;
   a: Aircraft;
   commandTab: string;
   setCommandTab: (tab: string) => void;
@@ -17,6 +19,7 @@ export function CommandStrip({
   onWhy: () => void;
   onDeselect: () => void;
 }) {
+  const dataset = data;
   return (
     <section className="command-strip" aria-label="Aircraft clearances">
       <div className="command-aircraft">
@@ -85,7 +88,7 @@ export function CommandStrip({
                 23000, 25000, 27000, 28000, 29000, 30000, 31000, 32000, 33000, 34000, 35000, 36000,
                 37000, 38000, 39000, 40000, 41000, 43000,
               ]
-                .filter((v) => v <= performance(a.typeId).ceilingFt)
+                .filter((v) => v <= performance(a.typeId, data).ceilingFt)
                 .map((v) => (
                   <button
                     key={v}

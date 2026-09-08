@@ -1,5 +1,4 @@
 import type { Aircraft, SimulationState } from '../domain/types';
-import { aircraftTypes } from '../data';
 import { workload } from '../simulation/engine';
 const time = (seconds: number) => new Date(seconds * 1000).toISOString().slice(14, 19);
 export function FlightInspector({
@@ -77,7 +76,7 @@ export function FlightInspector({
             {a.callsign}
             <span>{a.flightPlan.rvsm ? 'RVSM' : 'NON-RVSM'}</span>
           </h2>
-          <p>{aircraftTypes.find((t) => t.id === a.typeId)?.name}</p>
+          <p>{state.dataset.aircraftTypes.find((t) => t.id === a.typeId)?.name}</p>
           <dl>
             <dt>Control</dt>
             <dd>{a.controlState.replaceAll('_', ' ')}</dd>

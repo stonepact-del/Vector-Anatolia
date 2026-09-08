@@ -1,5 +1,5 @@
 import type { Aircraft, SimulationState } from '../domain/types';
-import { aircraftTypes, dataset, flows, performance } from '../data';
+import { performance } from '../data';
 import { validateFraRoute } from './fra';
 import { event } from './events';
 import { bearing, distance, iasFromTas, nextRandom, sectorAt, soundSpeed } from './math';
@@ -10,6 +10,9 @@ function random(s: SimulationState) {
   return value;
 }
 export function spawn(s: SimulationState, initial = false) {
+  const dataset = s.dataset,
+    flows = dataset.trafficFlows,
+    aircraftTypes = dataset.aircraftTypes;
   const index = s.spawned++;
   const flowIndex =
     s.scenario.id === 'istanbul'
@@ -19,11 +22,11 @@ export function spawn(s: SimulationState, initial = false) {
         : s.scenario.fra
           ? 8
           : Math.floor(random(s) * flows.length);
-  const flow = flows[flowIndex];
+  const flow = flows[flowIndex % flows.length];
   let route = [...flow.routes[0]];
   if (random(s) > 0.5) route.reverse();
   const type = aircraftTypes[index < 2 ? index : Math.floor(random(s) * aircraftTypes.length)];
-  const p = performance(type.id);
+  const p = performance(type.id, dataset);
   const level =
     p.category === 'TURBOPROP'
       ? 23000
@@ -39,24 +42,21 @@ export function spawn(s: SimulationState, initial = false) {
     position = { x: start.x + (end.x - start.x) * frac, y: start.y + (end.y - start.y) * frac };
     nextWaypoint = leg + 1;
   }
-  if (index === 0) {
-    route = ['SIMWA', 'SIMLA', 'SIMCA', 'SIMEA'];
-    position = { x: 245, y: 105 };
-    nextWaypoint = 1;
-  }
-  if (index === 1) {
-    route = ['SIMNA', 'SIMLA', 'SIMLB', 'SIMSA'];
-    position = { x: 315, y: 50 };
-    nextWaypoint = 1;
+  const orientation = dataset.simulation.orientationFlights[index];
+  if (orientation) {
+    route = [...orientation.route];
+    position = { ...orientation.position };
+    nextWaypoint = orientation.nextWaypoint;
   }
   const target = dataset.waypoints.find((w) => w.id === route[nextWaypoint])!;
-  const sector = sectorAt(position, dataset.sectors)?.id ?? 'S2';
+  const sector = sectorAt(position, dataset.sectors)?.id ?? dataset.simulation.initialSector;
   const heading = bearing(position, target);
   const controlled = s.combinedSectors.includes(sector);
-  const callsign =
+  let callsign =
     ['THY', 'PGT', 'SXS', 'QTR', 'UAE', 'DLH', 'BAW', 'FDB'][index % 8] +
     String(100 + Math.floor(random(s) * 899)) +
     (index % 3 === 0 ? 'A' : '');
+  if (s.aircraft.some((a) => a.callsign === callsign)) callsign += String(index);
   const id = `AC${String(index).padStart(5, '0')}`;
   const a: Aircraft = {
     id,
@@ -136,8 +136,8 @@ export function spawn(s: SimulationState, initial = false) {
   const blocked = () =>
     s.aircraft.some(
       (b) =>
-        distance(a.position, b.position) < 8 &&
-        Math.abs(a.altitudeFt - b.altitudeFt) < verticalMinimum(a, b),
+        distance(a.position, b.position) < dataset.separation.horizontalNm + 3 &&
+        Math.abs(a.altitudeFt - b.altitudeFt) < verticalMinimum(a, b, dataset.separation),
     );
   if (blocked()) {
     for (const candidate of [23000, 25000, 27000, 31000, 33000, 35000, 37000, 39000, 41000]) {

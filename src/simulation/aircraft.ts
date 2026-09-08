@@ -18,7 +18,7 @@ export function advanceAircraft(
   sec: number,
   wind: Point = { x: 12 / 3600, y: 0 },
 ): void {
-  const p = performance(a.typeId);
+  const p = performance(a.typeId, data);
   const wp = data.waypoints.find((w) => w.id === a.routeIntent[a.nextWaypoint]);
   if (a.navigationMode === 'ROUTE' && wp) {
     const reach = Math.max(1, (a.groundSpeedKt / 3600) * sec * 1.5);

@@ -77,7 +77,7 @@ export function validateCommand(
     ].includes(kind)
   )
     return 'Unknown clearance kind.';
-  const p = performance(a.typeId);
+  const p = performance(a.typeId, data);
   const own = s.combinedSectors.includes(a.owner ?? '');
   if (s.complete) return 'The shift has ended.';
   if (

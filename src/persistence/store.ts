@@ -1,4 +1,5 @@
 import { openDB } from 'idb';
+import { validateSettings, validateReplay } from './validation';
 import type { Replay } from '../domain/types';
 export interface Settings {
   accepted: boolean;
@@ -23,18 +24,29 @@ const db = () =>
 export async function getSettings(): Promise<Settings> {
   const value = await (await db()).get('local', 'settings');
   if (value === undefined) return structuredClone(defaults);
-  if (!value || !Array.isArray(value.completed) || typeof value.accepted !== 'boolean')
-    throw Error('Saved settings are corrupt. Reset local data in Settings.');
+  validateSettings(value);
   return { ...defaults, ...value };
 }
 export async function putSettings(settings: Settings) {
   await (await db()).put('local', settings, 'settings');
 }
 export async function getReplays(): Promise<Replay[]> {
-  return (await (await db()).get('local', 'replays')) ?? [];
+  const replays = (await (await db()).get('local', 'replays')) ?? [];
+  if (!Array.isArray(replays))
+    throw Error('Replay library is corrupt. Reset local data or import a backup.');
+  replays.forEach(validateReplay);
+  return replays;
 }
 export async function saveReplay(replay: Replay) {
   const replays = await getReplays();
+  const existing = replays.findIndex(
+    (r) =>
+      r.seed === replay.seed &&
+      r.scenario.id === replay.scenario.id &&
+      r.finalTick === replay.finalTick &&
+      r.finalHash === replay.finalHash,
+  );
+  if (existing >= 0) replays.splice(existing, 1);
   replays.unshift(replay);
   await (await db()).put('local', replays.slice(0, 20), 'replays');
 }
@@ -54,26 +66,8 @@ export function validateImport(
     v.replays.length > 20
   )
     throw Error('Invalid export format.');
-  for (const r of v.replays) {
-    if (
-      r.format !== 1 ||
-      typeof r.engineVersion !== 'string' ||
-      !Number.isInteger(r.finalTick) ||
-      r.finalTick < 0 ||
-      r.finalTick > 14400 ||
-      !r.initialState?.aircraft ||
-      !Array.isArray(r.actions) ||
-      !Array.isArray(r.commands) ||
-      r.commands.length > 100000
-    )
-      throw Error('Invalid replay data.');
-    if (
-      !r.initialState.aircraft.every((a) =>
-        [a.position.x, a.position.y, a.altitudeFt, a.tasKt].every(Number.isFinite),
-      )
-    )
-      throw Error('Replay contains invalid aircraft values.');
-  }
+  validateSettings(v.settings);
+  v.replays.forEach(validateReplay);
 }
 export async function exportLocal() {
   return { format: 1, settings: await getSettings(), replays: await getReplays() };

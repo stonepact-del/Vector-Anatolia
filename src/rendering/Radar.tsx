@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import type { Aircraft, SimulationState } from '../domain/types';
-import { dataset } from '../data';
 import { vector } from '../simulation/math';
 interface Props {
   state: SimulationState;
@@ -61,8 +60,14 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
           const w = element.clientWidth,
             h = element.clientHeight;
           app!.renderer.resize(w, h);
-          scale = Math.min((w - 100) / 800, (h - 90) / 380);
-          pan = { x: (w - 800 * scale) / 2, y: (h - 380 * scale) / 2 };
+          const bounds = latest.current.state.dataset.simulation.bounds,
+            width = bounds.maxX - bounds.minX,
+            height = bounds.maxY - bounds.minY;
+          scale = Math.min((w - 100) / width, (h - 90) / height);
+          pan = {
+            x: (w - width * scale) / 2 - bounds.minX * scale,
+            y: (h - height * scale) / 2 - bounds.minY * scale,
+          };
           world.position.set(pan.x, pan.y);
           world.scale.set(scale);
         };
@@ -186,6 +191,7 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
         }
         app.ticker.add(() => {
           const { state: s, selected, network, showLabels } = latest.current;
+          const dataset = s.dataset;
           const drawKey = `${s.clock.tick}/${selected}/${network}/${showLabels}/${revision}/${s.combinedSectors.join()}`;
           if (drawKey === lastDraw) return;
           lastDraw = drawKey;
@@ -288,7 +294,7 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
               label(`FIX${fix.id}`, fix.id, fix.x + 5, fix.y + 2, 0x527181, 8 / scale);
           }
           const chosen = s.aircraft.find((a) => a.id === selected);
-          if (chosen) {
+          if (chosen && !network) {
             let prev = chosen.position;
             for (const id of chosen.routeIntent.slice(chosen.nextWaypoint)) {
               const wp = dataset.waypoints.find((w) => w.id === id);
@@ -297,7 +303,7 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
                   .moveTo(prev.x, prev.y)
                   .lineTo(wp.x, wp.y)
                   .stroke({ color: 0x86cbbb, alpha: 0.65, width: 1 / scale });
-                label(`ROUTE${id}`, id, wp.x + 4, wp.y - 13, 0x91bfaf, 10 / scale);
+                label(`FIX${id}`, id, wp.x + 4, wp.y - 13, 0x91bfaf, 10 / scale);
                 prev = wp;
               }
             }

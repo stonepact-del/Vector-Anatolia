@@ -1,8 +1,11 @@
+import { nextSectorAlongIntent } from './airspace';
+import { fraWindowActive } from './fra';
 import { assertState } from './invariants';
 import { spawn } from './traffic';
 import { event } from './events';
 import type {
   Aircraft,
+  AIRACDataset,
   RecordedAction,
   Clearance,
   CommandIntent,
@@ -20,23 +23,27 @@ import { readback, validateCommand } from './commands';
 import { predictConflicts, segmentBreach, STCA_SECONDS, verticalMinimum } from './conflicts';
 import { distance, hash, sectorAt, STEP } from './math';
 export const ENGINE_VERSION = '1.0.0';
-export function fraActive(utcMs: number, altitude = 35000) {
-  const hour = (utcMs / 3600000) % 24;
-  return (
-    (hour >= dataset.fra.startHour || hour < dataset.fra.endHour) &&
-    altitude >= dataset.fra.lowerFt &&
-    altitude <= dataset.fra.upperFt
-  );
+export function fraActive(utcMs: number, altitude = 35000, data: AIRACDataset = dataset) {
+  return fraWindowActive(utcMs, altitude, data);
 }
 export function createState(
   scenario: Scenario = scenarios[0],
   seed = scenario.seed,
   density = 1,
   duration = scenario.durationSec,
+  data: AIRACDataset = dataset,
 ): SimulationState {
+  const dataset = data;
   validateDataset(dataset);
   if (
     !Number.isInteger(seed) ||
+    !Number.isFinite(duration) ||
+    !Number.isFinite(scenario.initialTraffic) ||
+    scenario.initialTraffic < 2 ||
+    !Number.isFinite(scenario.spawnIntervalSec) ||
+    scenario.spawnIntervalSec <= 0 ||
+    !Number.isFinite(scenario.startUtcHour) ||
+    !Array.isArray(scenario.events) ||
     !Number.isFinite(density) ||
     density < 0.2 ||
     density > 10 ||
@@ -45,6 +52,7 @@ export function createState(
   )
     throw Error('Invalid scenario settings.');
   const s: SimulationState = {
+    dataset: structuredClone(dataset),
     readbacks: [],
     actions: [],
     engineVersion: ENGINE_VERSION,
@@ -98,8 +106,8 @@ export function createState(
       extraMiles: 0,
       delaySeconds: 0,
     },
-    selectedSector: 'S2',
-    combinedSectors: ['S2'],
+    selectedSector: dataset.simulation.initialSector,
+    combinedSectors: [dataset.simulation.initialSector],
     complete: false,
     tutorialStep: 0,
     spawned: 0,
@@ -109,11 +117,12 @@ export function createState(
     fraActive: false,
   };
   for (let i = 0; i < s.scenario.initialTraffic; i++) spawn(s, true);
-  s.fraActive = fraActive(s.clock.startUtcMs);
+  s.fraActive = fraActive(s.clock.startUtcMs, 35000, dataset);
   if (scenario.conflict) {
     const [a, b] = s.aircraft;
-    a.position = { x: 245, y: 95 };
-    b.position = { x: 285, y: 95 };
+    const center = dataset.sectors.find((sec) => sec.id === s.selectedSector)!.center;
+    a.position = { x: center.x - 55, y: center.y };
+    b.position = { x: center.x - 15, y: center.y };
     a.altitudeFt = b.altitudeFt = a.clearedAltitudeFt = b.clearedAltitudeFt = 35000;
     a.headingDeg = a.trackDeg = 90;
     b.headingDeg = b.trackDeg = 270;
@@ -121,8 +130,8 @@ export function createState(
     b.assignedHeadingDeg = 270;
     a.navigationMode = b.navigationMode = 'HEADING';
     for (const ac of [a, b]) {
-      ac.owner = 'S2';
-      ac.sectorId = 'S2';
+      ac.owner = s.selectedSector;
+      ac.sectorId = s.selectedSector;
       ac.controlState = 'CONTROLLED';
       ac.identification = 'IDENTIFIED';
       ac.communication = 'CONTACT';
@@ -137,6 +146,7 @@ export function issueCommand(
   source: 'UI' | 'TEXT' | 'REPLAY' = 'UI',
   record = true,
 ): CommandResult {
+  const dataset = s.dataset;
   if (record)
     s.actions.push({
       type: 'COMMAND',
@@ -189,7 +199,7 @@ export function issueCommand(
     message: readback(a, intent),
     executeTick:
       s.clock.tick +
-      (immediate ? 1 : performance(a.typeId).responseTicks) +
+      (immediate ? 1 : performance(a.typeId, s.dataset).responseTicks) +
       (clarification ? 8 : 0),
   });
   a.lastCommunicationTick = s.clock.tick;
@@ -206,16 +216,14 @@ function execute(s: SimulationState, a: Aircraft, c: Clearance) {
       if (s.scenario.tutorial && s.tutorialStep === 2) s.tutorialStep = 3;
       break;
     case 'DIRECT':
-      if (a.emergency.kind === 'WEATHER' || a.emergency.kind === 'MEDICAL') {
+      if (a.emergency.kind === 'WEATHER' || a.emergency.kind === 'MEDICAL')
         a.emergency.acknowledged = true;
-        a.emergency.resolved = true;
-      }
       if (s.scenario.tutorial && s.tutorialStep === 3) s.tutorialStep = 4;
       break;
     case 'ACCEPT':
       a.owner = c.actor;
       a.controlState = 'ACCEPTED';
-      a.communication = 'CONTACT';
+      if (a.communication !== 'FAILED') a.communication = 'CONTACT';
       if (s.scenario.tutorial && s.tutorialStep === 0) s.tutorialStep = 1;
       break;
     case 'IDENTIFY':
@@ -269,6 +277,7 @@ export function workload(s: SimulationState, sector = s.selectedSector) {
   );
 }
 export function step(s: SimulationState) {
+  const dataset = s.dataset;
   assertState(s);
   if (s.complete) return;
   s.clock.tick++;
@@ -296,6 +305,21 @@ export function step(s: SimulationState) {
       }
     }
     advanceAircraft(a, dataset, STEP);
+    if (
+      a.emergency.kind === 'WEATHER' &&
+      a.emergency.acknowledged &&
+      !s.weather.some((w) => distance(w, a.position) < w.radiusNm + 20)
+    ) {
+      a.emergency.resolved = true;
+    }
+    if (
+      a.emergency.kind === 'MEDICAL' &&
+      a.emergency.acknowledged &&
+      a.routeIntent.slice(a.nextWaypoint).includes(a.flightPlan.exitPoint) &&
+      a.clearedAltitudeFt <= a.requestedAltitudeFt
+    ) {
+      a.emergency.resolved = true;
+    }
     if (tick % 20 === 0) {
       a.trail.push({ ...a.position });
       if (a.trail.length > 12) a.trail.shift();
@@ -334,9 +358,7 @@ export function step(s: SimulationState) {
         a.controlState = 'CONTROLLED';
       }
     }
-    const wp = dataset.waypoints.find((w) => w.id === a.routeIntent[a.nextWaypoint]);
-    a.nextSector = wp ? (sectorAt(wp, dataset.sectors)?.id ?? null) : null;
-    if (a.nextSector === a.sectorId) a.nextSector = null;
+    if (tick % 4 === 0) a.nextSector = nextSectorAlongIntent(a, dataset);
   }
   if (
     tick % Math.max(1, Math.round(s.scenario.spawnIntervalSec / STEP)) === 0 &&
@@ -351,14 +373,14 @@ export function step(s: SimulationState) {
         a.emergency = { kind: se.kind, declaredTick: tick, acknowledged: false, resolved: false };
         if (se.kind === 'COMMS') a.communication = 'FAILED';
         if (se.kind === 'MEDICAL') {
-          a.flightPlan.destination = 'LTAC';
-          a.flightPlan.exitPoint = 'SIMCB';
+          a.flightPlan.destination = dataset.simulation.medicalDestination;
+          a.flightPlan.exitPoint = dataset.simulation.medicalFix;
           a.requestedAltitudeFt = 25000;
         }
         event(
           s,
           'ABNORMAL',
-          `${a.callsign}: ${se.kind === 'COMMS' ? 'Communication failure. Protect last accepted intent.' : se.kind === 'MEDICAL' ? 'PAN PAN, medical urgency. Request diversion via SIMCB and lower level.' : se.kind === 'WEATHER' ? 'Request deviation around weather.' : 'Unable normal performance.'}`,
+          `${a.callsign}: ${se.kind === 'COMMS' ? 'Communication failure. Protect last accepted intent.' : se.kind === 'MEDICAL' ? `PAN PAN, medical urgency. Request diversion via ${dataset.simulation.medicalFix} and lower level.` : se.kind === 'WEATHER' ? 'Request deviation around weather.' : 'Unable normal performance.'}`,
           a.id,
           'WARNING',
         );
@@ -383,13 +405,14 @@ export function step(s: SimulationState) {
     for (let j = i + 1; j < s.aircraft.length; j++) {
       const a = s.aircraft[i],
         b = s.aircraft[j];
-      if (distance(a.position, b.position) > 6) continue;
+      if (distance(a.position, b.position) > dataset.separation.horizontalNm + 1) continue;
       const r = segmentBreach(
         before.get(a.id) ?? { p: a.position, alt: a.altitudeFt },
         { p: a.position, alt: a.altitudeFt },
         before.get(b.id) ?? { p: b.position, alt: b.altitudeFt },
         { p: b.position, alt: b.altitudeFt },
-        verticalMinimum(a, b),
+        verticalMinimum(a, b, dataset.separation),
+        dataset.separation.horizontalNm,
       );
       if (
         r.breach &&
@@ -447,7 +470,7 @@ export function step(s: SimulationState) {
       ...s.combinedSectors.map((sec) => workload(s, sec)),
     );
   }
-  const active = fraActive(s.clock.startUtcMs + tick * STEP * 1000);
+  const active = fraActive(s.clock.startUtcMs + tick * STEP * 1000, 35000, dataset);
   if (active !== s.fraActive) {
     s.fraActive = active;
     event(
@@ -457,7 +480,12 @@ export function step(s: SimulationState) {
     );
   }
   s.aircraft = s.aircraft.filter((a) => {
-    if (a.position.x < -20 || a.position.x > 820 || a.position.y < -20 || a.position.y > 400) {
+    if (
+      a.position.x < dataset.simulation.bounds.minX - 20 ||
+      a.position.x > dataset.simulation.bounds.maxX + 20 ||
+      a.position.y < dataset.simulation.bounds.minY - 20 ||
+      a.position.y > dataset.simulation.bounds.maxY + 20
+    ) {
       s.metrics.extraMiles += Math.max(0, a.distanceNm - a.baselineNm);
       s.metrics.delaySeconds += Math.max(
         0,
@@ -495,8 +523,8 @@ export function makeReplay(
   return {
     format: 1,
     engineVersion: ENGINE_VERSION,
-    datasetVersion: dataset.version,
-    datasetHash: dataset.contentHash,
+    datasetVersion: s.dataset.version,
+    datasetHash: s.dataset.contentHash,
     scenario: initial.scenario,
     seed: initial.seed,
     initialState: structuredClone(initial),
@@ -510,6 +538,8 @@ export function makeReplay(
   };
 }
 export function changeSector(s: SimulationState, sector: string, combine = false, record = true) {
+  const dataset = s.dataset;
+  if (s.complete) throw Error('The shift has ended.');
   if (!dataset.sectors.some((x) => x.id === sector)) throw Error('Unknown sector.');
   if (record)
     s.actions.push({
@@ -521,9 +551,17 @@ export function changeSector(s: SimulationState, sector: string, combine = false
     });
   s.selectedSector = sector;
   s.combinedSectors = combine ? [...new Set([...s.combinedSectors, sector])] : [sector];
+  for (const a of s.aircraft) {
+    if (a.communication === 'FAILED') continue;
+    if (s.combinedSectors.includes(a.owner ?? '')) {
+      a.communication = 'CONTACT';
+      if (a.controlState === 'TRANSFERRED') a.controlState = 'CONTROLLED';
+    } else if (a.owner) a.communication = 'OTHER';
+  }
   event(s, 'POSITION', `Position ${sector}${combine ? ' combined' : ''}.`);
 }
 export function finishShift(s: SimulationState, record = true) {
+  if (s.complete) return;
   if (record) s.actions.push({ type: 'FINISH', tick: s.clock.tick, sequence: s.actions.length });
   s.complete = true;
   s.clock.paused = true;
@@ -538,8 +576,8 @@ export function applyAction(s: SimulationState, action: RecordedAction) {
 export function replayTo(replay: Replay, tick = replay.finalTick): SimulationState {
   if (
     replay.engineVersion !== ENGINE_VERSION ||
-    replay.datasetVersion !== dataset.version ||
-    replay.datasetHash !== dataset.contentHash
+    replay.datasetVersion !== replay.initialState.dataset.version ||
+    replay.datasetHash !== replay.initialState.dataset.contentHash
   )
     throw Error('Replay is incompatible with this engine or dataset version.');
   const end = Math.min(Math.max(0, Math.floor(tick)), replay.finalTick);
@@ -553,6 +591,13 @@ export function replayTo(replay: Replay, tick = replay.finalTick): SimulationSta
     if (s.clock.tick === end || s.complete) break;
     step(s);
   }
+  if (
+    end === replay.finalTick &&
+    (stateHash(s) !== replay.finalHash || eventHash(s) !== replay.eventHash)
+  )
+    throw Error(
+      'Replay integrity check failed. The recording does not match this engine or has been altered.',
+    );
   return s;
 }
 export const tutorialSteps = [

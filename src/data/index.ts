@@ -109,52 +109,6 @@ const sectors: Sector[] = names.map((name, i) => {
     open: true,
   };
 });
-export const dataset: AIRACDataset = {
-  id: 'ANATOLIA-SIM',
-  version: '1.0.0',
-  contentHash: 'anatolia-original-grid-v1',
-  effectiveDate: '2025-11-27',
-  synthetic: true,
-  sectors,
-  firs: [
-    {
-      id: 'LTAA-SIM',
-      name: 'Ankara inspired region',
-      synthetic: true,
-      sectors: ['S2', 'S3', 'S4', 'S6', 'S7', 'S8'],
-    },
-    { id: 'LTBB-SIM', name: 'Istanbul inspired region', synthetic: true, sectors: ['S1', 'S5'] },
-  ],
-  waypoints: [
-    { id: 'SIMWA', x: 5, y: 90, role: 'ENTRY' },
-    { id: 'SIMWB', x: 5, y: 290, role: 'ENTRY' },
-    { id: 'SIMNA', x: 305, y: 5, role: 'ENTRY' },
-    { id: 'SIMNB', x: 495, y: 5, role: 'ENTRY' },
-    { id: 'SIMEA', x: 795, y: 90, role: 'EXIT' },
-    { id: 'SIMEB', x: 795, y: 290, role: 'EXIT' },
-    { id: 'SIMSA', x: 305, y: 375, role: 'EXIT' },
-    { id: 'SIMSB', x: 495, y: 375, role: 'EXIT' },
-    { id: 'SIMMA', x: 95, y: 95, role: 'INTERMEDIATE' },
-    { id: 'SIMLA', x: 290, y: 95, role: 'INTERMEDIATE' },
-    { id: 'SIMCA', x: 495, y: 95, role: 'INTERMEDIATE' },
-    { id: 'SIMDA', x: 695, y: 95, role: 'INTERMEDIATE' },
-    { id: 'SIMMB', x: 95, y: 285, role: 'INTERMEDIATE' },
-    { id: 'SIMLB', x: 290, y: 285, role: 'CONNECTING' },
-    { id: 'SIMCB', x: 495, y: 285, role: 'CONNECTING' },
-    { id: 'SIMDB', x: 695, y: 285, role: 'INTERMEDIATE' },
-    { id: 'SIMAX', x: 355, y: 165, role: 'INTERMEDIATE' },
-    { id: 'SIMBX', x: 445, y: 215, role: 'INTERMEDIATE' },
-  ],
-  rules,
-  fra: {
-    effectiveDate: '2025-11-27',
-    startHour: 20,
-    endHour: 2,
-    lowerFt: 30500,
-    upperFt: 66000,
-    fidelity: 'MODELED',
-  },
-};
 const specs: [
   string,
   AircraftPerformanceProfile['category'],
@@ -204,8 +158,10 @@ export const aircraftTypes: AircraftType[] = [
   profileId,
   wake: profileId === 'WB' || profileId === 'HV' ? 'H' : 'M',
 }));
-export const performance = (type: string) =>
-  profiles.find((p) => p.id === aircraftTypes.find((t) => t.id === type)?.profileId)!;
+export const performance = (type: string, data?: AIRACDataset) =>
+  (data?.performanceProfiles ?? profiles).find(
+    (p) => p.id === (data?.aircraftTypes ?? aircraftTypes).find((t) => t.id === type)?.profileId,
+  )!;
 export const flows: TrafficFlow[] = [
   [
     'EU_TR',
@@ -278,6 +234,76 @@ export const flows: TrafficFlow[] = [
   routes: [route as string[]],
   weight: 1,
 }));
+export const dataset: AIRACDataset = {
+  separation: {
+    id: 'SIM-ACC',
+    horizontalNm: 5,
+    rvsmFt: 1000,
+    nonRvsmFt: 2000,
+    provenanceIds: ['HORIZONTAL', 'VERTICAL'],
+  },
+  trafficFlows: flows,
+  aircraftTypes,
+  performanceProfiles: profiles,
+  simulation: {
+    initialSector: 'S2',
+    bounds: { minX: 0, minY: 0, maxX: 800, maxY: 380 },
+    orientationFlights: [
+      {
+        route: ['SIMWA', 'SIMLA', 'SIMCA', 'SIMEA'],
+        position: { x: 245, y: 105 },
+        nextWaypoint: 1,
+      },
+      { route: ['SIMNA', 'SIMLA', 'SIMLB', 'SIMSA'], position: { x: 315, y: 50 }, nextWaypoint: 1 },
+    ],
+    medicalDestination: 'LTAC',
+    medicalFix: 'SIMCB',
+  },
+  id: 'ANATOLIA-SIM',
+  version: '1.0.0',
+  contentHash: 'anatolia-original-grid-v1',
+  effectiveDate: '2025-11-27',
+  synthetic: true,
+  sectors,
+  firs: [
+    {
+      id: 'LTAA-SIM',
+      name: 'Ankara inspired region',
+      synthetic: true,
+      sectors: ['S2', 'S3', 'S4', 'S6', 'S7', 'S8'],
+    },
+    { id: 'LTBB-SIM', name: 'Istanbul inspired region', synthetic: true, sectors: ['S1', 'S5'] },
+  ],
+  waypoints: [
+    { id: 'SIMWA', x: 5, y: 90, role: 'ENTRY_EXIT' },
+    { id: 'SIMWB', x: 5, y: 290, role: 'ENTRY_EXIT' },
+    { id: 'SIMNA', x: 305, y: 5, role: 'ENTRY_EXIT' },
+    { id: 'SIMNB', x: 495, y: 5, role: 'ENTRY_EXIT' },
+    { id: 'SIMEA', x: 795, y: 90, role: 'ENTRY_EXIT' },
+    { id: 'SIMEB', x: 795, y: 290, role: 'ENTRY_EXIT' },
+    { id: 'SIMSA', x: 305, y: 375, role: 'ENTRY_EXIT' },
+    { id: 'SIMSB', x: 495, y: 375, role: 'ENTRY_EXIT' },
+    { id: 'SIMMA', x: 95, y: 95, role: 'INTERMEDIATE' },
+    { id: 'SIMLA', x: 290, y: 95, role: 'INTERMEDIATE' },
+    { id: 'SIMCA', x: 495, y: 95, role: 'INTERMEDIATE' },
+    { id: 'SIMDA', x: 695, y: 95, role: 'INTERMEDIATE' },
+    { id: 'SIMMB', x: 95, y: 285, role: 'INTERMEDIATE' },
+    { id: 'SIMLB', x: 290, y: 285, role: 'CONNECTING' },
+    { id: 'SIMCB', x: 495, y: 285, role: 'CONNECTING' },
+    { id: 'SIMDB', x: 695, y: 285, role: 'INTERMEDIATE' },
+    { id: 'SIMAX', x: 355, y: 165, role: 'INTERMEDIATE' },
+    { id: 'SIMBX', x: 445, y: 215, role: 'INTERMEDIATE' },
+  ],
+  rules,
+  fra: {
+    effectiveDate: '2025-11-27',
+    startHour: 20,
+    endHour: 2,
+    lowerFt: 30500,
+    upperFt: 66000,
+    fidelity: 'MODELED',
+  },
+};
 const base = {
   durationSec: 900,
   initialTraffic: 8,

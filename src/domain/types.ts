@@ -16,7 +16,7 @@ export interface Point {
 }
 export interface Waypoint extends Point {
   id: string;
-  role: 'ENTRY' | 'EXIT' | 'INTERMEDIATE' | 'CONNECTING';
+  role: 'ENTRY' | 'EXIT' | 'ENTRY_EXIT' | 'INTERMEDIATE' | 'CONNECTING';
 }
 export type Fix = Waypoint;
 export interface RouteLeg {
@@ -278,6 +278,17 @@ export interface SimulationEvent {
   severity: 'INFO' | 'WARNING' | 'CRITICAL';
 }
 export interface AIRACDataset {
+  separation: SeparationRule;
+  trafficFlows: TrafficFlow[];
+  aircraftTypes: AircraftType[];
+  performanceProfiles: AircraftPerformanceProfile[];
+  simulation: {
+    initialSector: string;
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+    orientationFlights: { route: string[]; position: Point; nextWaypoint: number }[];
+    medicalDestination: string;
+    medicalFix: string;
+  };
   id: string;
   version: string;
   contentHash: string;
@@ -316,6 +327,7 @@ export type RecordedAction = { tick: number; sequence: number } & (
   | { type: 'FINISH' }
 );
 export interface SimulationState {
+  dataset: AIRACDataset;
   readbacks: PilotReadback[];
   actions: RecordedAction[];
   engineVersion: string;
@@ -390,7 +402,7 @@ export type WorkerRequest =
   | { type: 'SEEK'; tick: number }
   | { type: 'EXPORT_REPLAY' };
 export type WorkerResponse =
-  | { type: 'STATE'; state: SimulationState; replaying: boolean }
+  | { type: 'STATE'; state: SimulationState; replaying: boolean; replayFinalTick?: number }
   | { type: 'RESULT'; result: CommandResult }
   | { type: 'ERROR'; message: string }
   | { type: 'REPLAY_DATA'; replay: Replay };

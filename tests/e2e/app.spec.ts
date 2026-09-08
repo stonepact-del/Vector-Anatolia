@@ -7,7 +7,8 @@ test('tutorial control cycle, pause, report, persistence and replay', async ({ p
   await page.getByRole('button', { name: 'BEGIN GUIDED SESSION' }).click();
   await expect(page.locator('canvas')).toBeVisible();
   await page.locator('.flight-row').filter({ hasText: 'THY' }).first().click();
-  await page.getByRole('button', { name: 'ACCEPT', exact: true }).click();
+  await page.getByRole('button', { name: 'ACCEPT', exact: true }).focus();
+  await page.keyboard.press('Space');
   await expect(page.getByRole('button', { name: 'IDENTIFY', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'IDENTIFY', exact: true }).click();
   await expect(page.locator('.tutorial h3')).toHaveText('Issue a level clearance');
@@ -18,6 +19,10 @@ test('tutorial control cycle, pause, report, persistence and replay', async ({ p
   await page.getByRole('button', { name: 'DIRECT', exact: false }).filter({ hasText: '⌃' }).click();
   await page.getByRole('button', { name: 'SIMCA', exact: true }).click();
   await expect(page.locator('.tutorial h3')).toHaveText('Coordinate and transfer');
+  const callsign = (await page.locator('.command-aircraft strong').textContent())!;
+  await page.getByLabel('Command entry').fill(`${callsign} SPEED M078`);
+  await page.getByLabel('Command entry').press('Enter');
+  await expect(page.locator('.history-row').filter({ hasText: 'MACH' })).toContainText('EXECUTED');
   await page
     .getByRole('button', { name: 'TRANSFER', exact: false })
     .filter({ hasText: '⌃' })
@@ -41,7 +46,14 @@ test('tutorial control cycle, pause, report, persistence and replay', async ({ p
   await page.getByRole('button', { name: 'REPLAYS ↗', exact: true }).click();
   await expect(page.locator('.replay-row')).toHaveCount(1);
   await page.locator('.replay-row').click();
-  await expect(page.getByRole('slider', { name: 'Replay seek' })).toBeVisible();
+  const seek = page.getByRole('slider', { name: 'Replay seek' });
+  await expect(seek).toBeVisible();
+  await seek.fill((await seek.getAttribute('max'))!);
+  await expect(page.locator('.replay-bar span')).not.toHaveText('00:00');
+  await seek.fill('0');
+  await expect(page.locator('.replay-bar span')).toHaveText('00:00');
+  await page.getByRole('button', { name: 'Resume simulation' }).click();
+  await expect(page.locator('.replay-bar span')).not.toHaveText('00:00');
   expect(errors).toEqual([]);
 });
 test('conflict scenario, command syntax feedback and viewport layouts', async ({ page }) => {
@@ -78,4 +90,27 @@ test('medical scenario produces an actionable abnormal state', async ({ page }) 
   await expect(page.locator('.abnormal-box')).toContainText('MEDICAL', { timeout: 20000 });
   await page.getByRole('button', { name: 'ACKNOWLEDGE', exact: true }).click();
   await expect(page.locator('.abnormal-box')).toContainText('Acknowledged');
+});
+
+test('local settings survive reload and malformed import recovers safely', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'BEGIN GUIDED SESSION' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByLabel('Reduced motion').check();
+  await page.getByLabel('Aircraft labels', { exact: true }).uncheck();
+  await page.reload();
+  await page.getByRole('button', { name: 'BEGIN GUIDED SESSION' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByLabel('Reduced motion')).toBeChecked();
+  await expect(page.getByLabel('Aircraft labels', { exact: true })).not.toBeChecked();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'broken.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{"format":1,"settings":null,"replays":[]}'),
+  });
+  await expect(page.getByRole('alert')).toContainText('Invalid export format');
+  await page.getByRole('button', { name: 'Dismiss error' }).click();
+  await expect(page.getByLabel('Reduced motion')).toBeChecked();
+  await page.getByRole('button', { name: 'BACK', exact: true }).click();
+  await expect(page.locator('canvas')).toBeVisible();
 });

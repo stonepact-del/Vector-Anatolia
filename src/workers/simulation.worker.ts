@@ -10,6 +10,7 @@ import {
   replayTo,
   step,
 } from '../simulation/engine';
+import { validateReplay } from '../persistence/validation';
 import { FixedStepScheduler } from '../simulation/clock';
 let state: SimulationState | null = null,
   initial: SimulationState | null = null,
@@ -19,7 +20,8 @@ let state: SimulationState | null = null,
 const scheduler = new FixedStepScheduler();
 const send = (message: WorkerResponse) => postMessage(message);
 const publish = () => {
-  if (state) send({ type: 'STATE', state, replaying: !!replay });
+  if (state)
+    send({ type: 'STATE', state, replaying: !!replay, replayFinalTick: replay?.finalTick });
 };
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   try {
@@ -58,8 +60,10 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           send({ type: 'REPLAY_DATA', replay: makeReplay(initial, state, checkpoints) });
         break;
       case 'REPLAY':
+        validateReplay(m.replay);
+        const restored = replayTo(m.replay, 0);
         replay = m.replay;
-        state = replayTo(replay, 0);
+        state = restored;
         state.clock.paused = true;
         initial = structuredClone(state);
         scheduler.reset();

@@ -21,6 +21,6 @@ await writeFile(
   `const CACHE=${JSON.stringify(version)};const ASSETS=${JSON.stringify(assets)};
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('ankara-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==self.location.origin||event.request.method!=='GET')return;event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).catch(error=>{if(event.request.mode==='navigate')return caches.match(new URL('./index.html',self.registration.scope));throw error})));});`,
+self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(url.origin!==self.location.origin||event.request.method!=='GET')return;event.respondWith((async()=>{const cache=await caches.open(CACHE);if(event.request.mode==='navigate'){const shell=await cache.match(new URL('./index.html',self.registration.scope).href,{ignoreVary:true});if(shell)return shell;}const cached=await cache.match(event.request,{ignoreVary:true});return cached||fetch(event.request);})());});`,
 );
 console.log('Offline cache:', version, assets.length, 'assets');
