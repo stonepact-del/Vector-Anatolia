@@ -88,6 +88,8 @@ Read:
 - [Data licensing and replacement strategy](docs/data-licensing.md)
 - [Simulation model and measured limits](docs/simulation-model.md)
 - [UI system](docs/ui-system.md)
+- [V1 verification record](docs/verification.md)
+- [Runtime dependency notices](public/third-party-notices.txt)
 
 ## Static deployment and offline behavior
 

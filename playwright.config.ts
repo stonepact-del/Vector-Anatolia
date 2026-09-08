@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
+  outputDir: './test-results/e2e',
   testIgnore: 'offline.spec.ts',
   timeout: 90000,
   expect: { timeout: 10000 },
