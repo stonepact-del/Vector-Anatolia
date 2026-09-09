@@ -1,6 +1,6 @@
-# ANKARA CONTROL
+# ANKARA CONTROL — Living Airspace
 
-**Türkiye Area Control Simulator** — an original, offline, browser-based area-control simulation. Open a shift, identify and control traffic, manage developing conflicts, coordinate transfers, respond to abnormal events, then review your decisions in a local replay.
+**Türkiye Area Control Simulator** — an original, offline area-control simulation where traffic demand, pilot requests, radio occupancy, weather, conflicts and adjacent sectors interact throughout a shift.
 
 **UNOFFICIAL. Not affiliated with DHMİ, ICAO or EUROCONTROL. Not suitable for navigation or operational air traffic control. Not a certified ATC training system. For entertainment and education only.**
 
@@ -39,11 +39,11 @@ Playwright starts the required local server. Installing Chromium and its Linux s
 ## Play
 
 1. Start **Quiet Sector** for the guided tutorial. Select the inbound THY flight in the radar or flight list.
-2. **ACCEPT**, then **IDENTIFY**, establishes modeled communication, exclusive ownership and target identification.
-3. Select **LEVEL**, **DIRECT**, **HEADING** or **SPEED**. Aircraft respond after a readback delay and maneuver gradually.
-4. **TRANSFER** coordinates with an adjacent sector; **CONTACT** completes the ownership transfer.
-5. Watch planning conflicts and the separate STCA-style safety net. Use **WHY?** to inspect the modeled rules, not an automatic resolution.
-6. Finish the shift for a safety-first report and local replay.
+2. **ACCEPT** the offered handoff, listen for the initial call, then **IDENTIFY** the correlated target.
+3. Issue **LEVEL**, **DIRECT**, **HEADING** or **SPEED**. Controller transmission, pilot readback and execution occupy the modeled frequency in sequence.
+4. Respond to condition-driven pilot requests with **APPROVE**, **DENY**, or a modified tactical clearance.
+5. **TRANSFER** offers traffic to an adjacent-sector agent. Receiving workload determines acceptance delay; **CONTACT** appears only after acceptance.
+6. Resolve planning conflicts before the separate STCA-style safety net, manage the demand peak, then review the event timeline and replay.
 
 Structured commands invoke the same domain engine as buttons. For the actual selected callsign, examples are `THY961A CLIMB FL370`, `THY961A DIRECT SIMCA`, `THY961A HEADING 090`, and `THY961A SPEED M080`. Input suggestions explain syntax. Fixes beginning with `SIM` are explicitly fictional.
 
@@ -54,22 +54,23 @@ Space pauses, `/` focuses command input, Escape clears selection, and the normal
 - Ten scenarios: Quiet Sector, Normal Ops, Istanbul Flow, Summer Rush, Transit Wave, Thunderstorm Deviations, Communication Failure, Medical Diversion, Sector Overload, and Night FRA.
 - Low, standard and busy traffic density; 15-, 30- and 60-minute shifts; reproducible seeds.
 - Five aircraft performance categories and ten representative aircraft type codes.
-- Eight synthetic geographic sectors with lower/upper layer definitions; initial positions combine those layers.
-- Tactical radar and a functional network view with traffic, inbound and conflict counts plus selectable/combined positions.
-- Procedural weather requests, two dedicated abnormal missions, versioned modeled nighttime FRA applicability, delayed clearances, identification and handoffs.
-- Reports, major-event timelines, deterministic replay with seek, local progress/settings, and data export/import/reset.
+- Public-domain Natural Earth Türkiye outline in a locally projected radar scope, with eight explicitly modeled sectors and fictional fixes.
+- Tactical labels for offered/contacting/requesting/transferring traffic and a network view with traffic, inbound, conflicts and frequency load.
+- Active inbound lifecycle, prioritized controller/pilot/system radio queue, condition-driven requests and deterministic adjacent-sector coordination.
+- Quiet → building → busy → peak → recovery traffic demand, flow-family pressure, procedural weather consequences and stateful abnormalities.
+- Safety/Flow/Efficiency debrief, radio/request/handoff metrics, major-event timeline, deterministic replay/seek and local data management.
 - Installable PWA metadata, original icons and a production offline cache.
 
 ## Architecture
 
-React presents controls and reports. A dedicated Web Worker owns the deterministic simulation. Aircraft integrate at a fixed **250 ms timestep**, independent of PixiJS rendering. A seeded generator creates traffic; the action log preserves commands, rejected attempts, position changes and shift completion. Prediction uses the same motion intent and fixed-step aircraft model.
+React presents controls and reports. A dedicated Web Worker owns the deterministic simulation. Aircraft integrate at a fixed **250 ms timestep**, independent of PixiJS rendering. Cohesive domain modules own communications, pilot requests, adjacent sectors, attention, demand and workload. A seeded generator creates traffic and causal events; the action log preserves player actions while system events regenerate from state.
 
 PixiJS renders a local WebGL radar with no map service. IndexedDB stores settings, progress and up to 20 replays. No backend, account, database service, analytics, live aircraft feed, AI API or weather API is required. No ADS-B or live schedules are consumed.
 
 Important code:
 
 - [Domain and provider contracts](src/domain/types.ts)
-- [Simulation orchestration](src/simulation/engine.ts), [clearances](src/simulation/commands.ts), [conflicts](src/simulation/conflicts.ts)
+- [Simulation orchestration](src/simulation/engine.ts), [communications](src/simulation/communications.ts), [requests](src/simulation/requests.ts), [adjacent sectors](src/simulation/adjacentSectors.ts), [traffic demand](src/simulation/trafficDemand.ts), [clearances](src/simulation/commands.ts), [conflicts](src/simulation/conflicts.ts)
 - [Worker and scheduler](src/workers/simulation.worker.ts)
 - [Radar renderer](src/rendering/Radar.tsx)
 - [Original dataset and scenarios](src/data/index.ts)
@@ -79,7 +80,7 @@ Important code:
 
 DHMİ AIP sections, publicly accessible ICAO material and EUROCONTROL STCA guidance inform the models. Source inspection does **not** establish complete current amendment applicability. No implemented operational rule is claimed `VERIFIED` in this release. Published concepts and conservative modeled behavior are distinguished in typed provenance records and the in-app **Simulation Fidelity** section.
 
-All bundled sector geometry, fixes, routes, schedules, performance numbers, weather and map artwork are original synthetic/modelled material. No AIP PDF, chart, extracted navigation table, airline logo or proprietary controller UI is redistributed. Providers separate dataset content from domain concepts so an authorized replacement can be integrated without redesigning the simulation.
+The geographic base is a transformed extract from Natural Earth 1:110m Admin 0 Countries, whose official terms place the vectors in the public domain. All sector geometry, fixes, routes, schedules, performance numbers and weather remain original modeled material. No AIP PDF, chart, extracted navigation table, airline logo or proprietary controller UI is redistributed.
 
 Read:
 
@@ -88,7 +89,7 @@ Read:
 - [Data licensing and replacement strategy](docs/data-licensing.md)
 - [Simulation model and measured limits](docs/simulation-model.md)
 - [UI system](docs/ui-system.md)
-- [V1 verification record](docs/verification.md)
+- [Living Airspace verification record](docs/verification.md)
 - [Runtime dependency notices](public/third-party-notices.txt)
 
 ## Static deployment and offline behavior
@@ -99,6 +100,6 @@ A first visit still requires downloading the site. HTTPS or localhost is require
 
 ## Current limits
 
-This is an en-route entertainment simulation, not an operational digital twin. The schematic network does not reproduce certified Ankara ACC sector boundaries. FRA uses a dated 27 November 2025 publication snapshot, not a live AIRAC service. Neighboring coordination, radio identification, phraseology and abnormal procedures are simplified; neighboring units do not implement a complete tactical controller AI. Separate staffing of vertical layers, terminal/runway operations, terrain/obstacle clearance, full military exceptions and certified aircraft performance are outside V1.
+This is an en-route entertainment simulation, not an operational digital twin. The recognizable country outline is generalized and not suitable for navigation; sectors do not reproduce Ankara ACC boundaries. FRA uses a dated 27 November 2025 publication snapshot. Adjacent units are deterministic coordination agents, not tactical controller AI. Radio timing, identification, phraseology and abnormalities are simplified. Vertical-layer staffing, terminal/runway operations, terrain/obstacle clearance, military exceptions and certified performance remain outside this release.
 
-English is the initial interface language. Desktop/laptop is the primary target, with tablet degradation; WebGL is required. Replays are version-bound. Very dense traffic can reduce effective simulation speed, particularly at 4×; the engine preserves physics steps instead of skipping them. The 300-aircraft benchmark reports measured host-dependent costs and is not a guarantee of 300-aircraft real-time operation on every device.
+English is the initial interface language. Desktop/laptop is primary, with tablet degradation; WebGL is required. Living Airspace uses engine/dataset 2.0. Older V1 replays are rejected with an explicit incompatibility message rather than silently diverging. Very dense traffic can reduce effective simulation speed, particularly at 4×; benchmarks are host-dependent measurements, not guarantees.

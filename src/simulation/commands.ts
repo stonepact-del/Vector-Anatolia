@@ -15,6 +15,8 @@ export const verbs = [
   'TRANSFER S3',
   'CONTACT',
   'ACKNOWLEDGE',
+  'APPROVE',
+  'DENY',
 ];
 export function parseCommand(
   text: string,
@@ -48,7 +50,10 @@ export function parseCommand(
     if (!/^[A-Z0-9]+$/.test(arg))
       return { ok: false, error: `${verb} requires a ${verb === 'DIRECT' ? 'fix' : 'sector'}.` };
     value = arg;
-  } else if (!['RESUME', 'ACCEPT', 'IDENTIFY', 'CONTACT', 'ACKNOWLEDGE'].includes(verb) || arg)
+  } else if (
+    !['RESUME', 'ACCEPT', 'IDENTIFY', 'CONTACT', 'ACKNOWLEDGE', 'APPROVE', 'DENY'].includes(verb) ||
+    arg
+  )
     return { ok: false, error: 'Unknown syntax. Select a command suggestion below.' };
   return { ok: true, intent: { callsign, kind, value } };
 }
@@ -74,6 +79,8 @@ export function validateCommand(
       'TRANSFER',
       'CONTACT',
       'ACKNOWLEDGE',
+      'APPROVE',
+      'DENY',
     ].includes(kind)
   )
     return 'Unknown clearance kind.';
@@ -89,20 +96,30 @@ export function validateCommand(
     return !s.combinedSectors.includes(a.sectorId) &&
       !s.combinedSectors.includes(a.nextSector ?? '')
       ? 'This flight is not inbound to your sectors.'
-      : !['INBOUND', 'COORDINATED', 'TRANSFER_PENDING'].includes(a.controlState)
+      : a.controlState !== 'HANDOFF_OFFERED'
         ? 'No inbound handoff is pending.'
         : null;
+  if (kind === 'APPROVE' || kind === 'DENY')
+    return s.pilotRequests.some((r) => r.aircraftId === a.id && r.status === 'PENDING')
+      ? null
+      : 'No pilot request is awaiting a response.';
   if (kind === 'ACKNOWLEDGE')
     return a.emergency.kind === 'NONE' ? 'No abnormal transmission to acknowledge.' : null;
   if (!own) return 'Accept this aircraft before issuing control instructions.';
   if (a.communication === 'FAILED')
     return 'Communication failure: this aircraft cannot receive radio clearances.';
   if (kind === 'IDENTIFY')
-    return a.identification === 'IDENTIFIED' ? 'Aircraft is already identified.' : null;
+    return a.identification === 'IDENTIFIED'
+      ? 'Aircraft is already identified.'
+      : a.controlState !== 'INITIAL_CONTACT'
+        ? 'Wait for the aircraft initial call before identification.'
+        : null;
   if (a.identification !== 'IDENTIFIED')
     return 'Identify the correlated target before issuing a surveillance clearance.';
   if (kind === 'CONTACT')
-    return a.controlState !== 'TRANSFER_INITIATED' ? 'Initiate a transfer first.' : null;
+    return a.controlState !== 'TRANSFER_ACCEPTED'
+      ? 'Wait for the receiving sector to accept the transfer.'
+      : null;
   if (kind === 'TRANSFER') {
     const target = data.sectors.find((sec) => sec.id === value);
     if (!target) return 'Unknown receiving sector.';
@@ -111,7 +128,7 @@ export function validateCommand(
       return 'Transfer requires an adjacent sector.';
     return null;
   }
-  if (a.controlState === 'TRANSFER_INITIATED')
+  if (['OUTBOUND_COORDINATION', 'TRANSFER_ACCEPTED', 'FREQUENCY_CHANGE'].includes(a.controlState))
     return 'Complete the pending contact before a further clearance.';
   if (['CLIMB', 'DESCEND', 'LEVEL'].includes(kind)) {
     if (
@@ -174,6 +191,8 @@ export function readback(a: Aircraft, intent: CommandIntent): string {
     TRANSFER: `Coordination requested with ${v}`,
     CONTACT: 'Changing frequency',
     ACKNOWLEDGE: 'Priority request acknowledged',
+    APPROVE: 'Request approved',
+    DENY: 'Request unable',
   };
   return `${a.callsign}, ${phrase[intent.kind]}.`;
 }

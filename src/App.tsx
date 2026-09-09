@@ -246,7 +246,7 @@ export default function App() {
           <img src="./mark.svg" alt="" />
           <span>
             ANKARA <b>CONTROL</b>
-            <small>TÜRKİYE AREA CONTROL SIMULATOR</small>
+            <small>LIVING AIRSPACE · TÜRKİYE AREA CONTROL</small>
           </span>
         </button>
         <div className="top-divider" />
@@ -271,6 +271,10 @@ export default function App() {
             <div className="traffic-total">
               <strong>{state.aircraft.length.toString().padStart(2, '0')}</strong>
               <span>TRAFFIC</span>
+            </div>
+            <div className="phase-readout">
+              <span>{state.trafficPhase}</span>
+              <small>{state.challengeCode}</small>
             </div>
             <div className="speed-controls" aria-label="Simulation speed">
               {([0.5, 1, 2, 4] as const).map((speed) => (
@@ -391,7 +395,8 @@ export default function App() {
               {state.scenario.tutorial && !network && (
                 <div className="tutorial">
                   <span className="eyebrow">
-                    GUIDED SESSION · {Math.min(state.tutorialStep + 1, 6)} / 6
+                    GUIDED SESSION · {Math.min(state.tutorialStep + 1, tutorialSteps.length)} /{' '}
+                    {tutorialSteps.length}
                   </span>
                   <div className="tutorial-progress">
                     {tutorialSteps.map((_, i) => (
@@ -417,10 +422,12 @@ export default function App() {
                         {sec.id} {sec.name}
                       </button>
                       <button
-                        aria-label={`Combine ${sec.name}`}
+                        aria-label={`${state.combinedSectors.includes(sec.id) && state.combinedSectors.length > 1 ? 'Split' : 'Combine'} ${sec.name}`}
                         onClick={() => send({ type: 'SECTOR', sector: sec.id, combine: true })}
                       >
-                        +
+                        {state.combinedSectors.includes(sec.id) && state.combinedSectors.length > 1
+                          ? '−'
+                          : '+'}
                       </button>
                     </div>
                   ))}

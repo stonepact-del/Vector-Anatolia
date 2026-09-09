@@ -1,38 +1,32 @@
-# V1 verification record
+# Living Airspace verification record
 
-Final verification: 8 September 2026, Linux Codespaces, Node 24.20.0, Chromium through Playwright with software WebGL. This record covers the original V1; no Living Airspace expansion is included.
+Final verification: 9 September 2026, Linux Codespaces, Node 24, Chromium through Playwright with software WebGL. This record covers engine/dataset 2.0 and the Active Controller + Living Airspace release.
 
 ## Automated checks
 
-- Clean `npm ci`: passed; zero reported dependency vulnerabilities at installation.
-- `npm run typecheck`: passed.
+- `npm run typecheck`: passed with strict TypeScript.
 - `npm run lint`: passed (Prettier formatting check).
-- `npm test`: 83 tests passed across four files.
-- `npm run test:e2e`: five browser tests passed.
-- `npm run build`: passed; static worker, renderer assets, documentation and dependency notices precached.
-- `npm run test:offline`: production reload and simulation with the network disconnected verified separately.
+- `npm test`: 103 tests passed across five files.
+- `npm run test:e2e`: six Chromium workflows passed.
+- `npm run build`: passed; Vite built 774 modules and generated the static worker/renderer bundles.
+- `npm run test:offline`: passed with the browser disconnected after installation; no external runtime requests or console/page errors were observed.
 
-The unit suite exercises fixed-timestep independence across render rates, seeded scenarios, aircraft response, geospatial and sector calculations, exclusive ownership, clearances/readbacks, threshold boundaries, RVSM, swept separation, intent prediction, FRA activation/point roles, weather and radio/medical states, replay reconstruction/checksums, corrupt imports and replacement dataset injection. All ten scenario families receive deterministic finite-state checks. A 300-aircraft benchmark is measured, not a real-time performance guarantee: the final run under concurrent browser load took 1.31 seconds for prediction and 1.21 seconds per simulated second.
+The unit suite covers fixed-timestep independence, seeded scenario/event determinism, finite-state invariants, motion and performance response, geospatial/sector calculations, provider replacement, exclusive ownership, separation thresholds, RVSM, swept conflict prediction, FRA activation, replay reconstruction and import validation. Living Airspace tests additionally cover advance notification, inbound acceptance, initial contact, identification, queued transmissions, frequency load, single-readback execution gating, pilot request approval/denial, workload-dependent adjacent acceptance, transferred-aircraft rejection, weather causality, demand phases, challenge codes and V1 replay incompatibility.
 
-Browser flows cover tutorial acceptance/identification, button and typed clearances, delayed execution, transfer/contact, pause/speed, conflict alerts, medical urgency, report completion, saved replay/reload/seek, network view, settings persistence and invalid-import recovery. The offline test rejects external runtime requests and page errors. Gameplay tests check page errors in their exercised flows.
+Browser workflows exercise the complete tutorial cycle from inbound offer through delayed outbound transfer, typed and button clearances, readback execution, pause/speed, proactive conflict handling and STCA display, medical and weather requests, report/timeline, saved replay reload/seek, network view, settings persistence and corrupt-import recovery. The separate production test verifies the service-worker cache and a running simulation with network access disabled.
 
 ## Visual and interaction review
 
-Inspected real Chromium screenshots at 1440×900, 1366×768, 1920×1080 and 1024×768. Reviewed briefing, selected aircraft, level chooser, tactical conflict state, paused network, and shift report. Automated layout checks found no document-width overflow. Semantic controls, keyboard activation, visible focus, reduced-motion settings and modal focus management are implemented. Radar labels can be repositioned and the scope panned/zoomed; very dense labels still require controller attention. This is not a formal assistive-technology certification or exhaustive cross-browser audit.
+Real Chromium screenshots were inspected at 1440×900, 1366×768, 1920×1080 and 1024×768. Review covered briefing, recognizable Türkiye scope, modeled sector overlay, selected labels, command chooser, attention and frequency state, paused network view, and post-shift report. Automated checks found no document-width overflow. The 1024 layout remains usable by narrowing the flight rail; phone gameplay is outside the product target.
 
-## Stabilization changes
+The scope keeps geographic source and modeled sector fidelity visible without turning into a street map. Label symbols and inspector text distinguish approaching, offered, initial-contact, request, transfer, abnormal and safety states. Semantic controls, keyboard activation, focus rings, reduced-motion support, modal focus handling and text/shape alert cues are present. This review is not a formal assistive-technology or cross-browser certification.
 
-- Isolated gameplay/offline test artifacts to prevent trace cleanup collisions.
-- Corrected offline cache matching for static responses with `Vary: Origin`.
-- Hardened replay/import validation and end-state verification; preserved rejected actions and position changes.
-- Removed dataset-specific engine assumptions; tested renamed and translated replacement data.
-- Corrected first-boundary handoff routing, FRA role/activation checks, communication-failure acceptance, and abnormal-state resolution conditions.
-- Improved prediction candidate coverage, finite-state checks, traffic entry safety and pilot-response feedback.
-- Reduced redundant radar rendering and corrected overlapping network/tutorial overlays.
-- Included runtime dependency license notices and normalized their formatting.
+## Performance measurement
+
+`tests/performance.test.ts` runs the deterministic predictor at 50, 100, 200 and 300 active aircraft. The final verification run recorded 54, 90, 153 and 154 ms respectively; four complete physics/prediction steps representing one simulated second at 300 aircraft took 205 ms. Run-to-run scheduling noise can make individual points non-monotonic. The earlier 250 ms forecast integrator measured about 1.3 seconds for a 300-aircraft pass on this project host. These are software-rendered shared-host measurements, not frame-rate guarantees; heavy processing slows simulation wall time rather than skipping fixed physics steps.
 
 ## Release boundaries
 
-The provenance audit claims no implemented operational rule VERIFIED. Published concepts remain MODELED or SIMPLIFIED because complete current amendment reconciliation was not established. All bundled airspace/navigation/performance content is synthetic. No AIP PDFs, charts or extracted navigation tables are distributed. See [procedural fidelity](procedural-fidelity.md), [licensing](data-licensing.md) and [simulation limits](simulation-model.md).
+No implemented operational ATC rule is claimed `VERIFIED`. Natural Earth's source identity and public-domain reuse statement are `VERIFIED` metadata for the generalized geographic outline only. Separation, FRA, identification, coordination, radio timing, pilot behavior, workload, sector structure, navigation points, performance and abnormal handling remain `MODELED` or `SIMPLIFIED` as listed in [procedural fidelity](procedural-fidelity.md).
 
-Build output, browser screenshots, traces and installed dependencies are ignored, not source deliverables. The final diff whitespace check passes. The static application needs no external runtime API. First-time installation/cache population requires downloading the site; subsequent offline operation requires supported browser storage and WebGL.
+No AIP PDF, protected chart, extracted navigation table, live schedule, ADS-B feed or proprietary controller UI is distributed. Eight sectors, fixes, routes, traffic schedules and performance profiles are original modeled data. Browser screenshots, build output, test traces and installed dependencies are ignored development artifacts. Engine 2.0 rejects V1 recordings with an explicit incompatibility error; it never silently replays them under changed rules.

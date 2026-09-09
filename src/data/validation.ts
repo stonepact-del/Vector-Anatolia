@@ -59,6 +59,20 @@ export function validateSimulationConfiguration(data: AIRACDataset) {
   if (!b || !Object.values(b).every(Number.isFinite) || b.maxX <= b.minX || b.maxY <= b.minY)
     throw Error('Invalid simulation bounds.');
   if (
+    !Array.isArray(data.simulation.geographicOutline) ||
+    !data.simulation.geographicOutline.length ||
+    data.simulation.geographicOutline.some(
+      (ring) => ring.length < 3 || ring.some((p) => ![p.x, p.y].every(Number.isFinite)),
+    ) ||
+    !data.simulation.geographicSource?.name ||
+    !data.simulation.geographicSource.license ||
+    !Array.isArray(data.simulation.landmarks) ||
+    data.simulation.landmarks.some(
+      (l) => !l.id || !l.name || ![l.position.x, l.position.y].every(Number.isFinite),
+    )
+  )
+    throw Error('Invalid or unlicensed geographic base configuration.');
+  if (
     !Array.isArray(data.trafficFlows) ||
     !data.trafficFlows.length ||
     !Array.isArray(data.aircraftTypes) ||

@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { Settings } from '../persistence/store';
 import { scenarios } from '../data';
 import { disclaimer } from './strings';
+import { dataset } from '../data';
+import { challengeCode } from '../simulation/engine';
 export function ScenarioBriefing({
   scenarioChoice,
   setScenarioChoice,
@@ -128,8 +130,10 @@ export function ScenarioBriefing({
             </label>
           </div>
           <p className="practice-note">
-            All scenarios are available in practice mode. Complexity increases; procedure rules stay
-            the same.
+            DEMAND PROFILE · QUIET → BUILDING → BUSY → PEAK → RECOVERY
+            <br />
+            CHALLENGE {challengeCode(scenario.id, seed, dataset.version)} · All scenarios are
+            available in practice mode.
           </p>
           <button className="primary begin" onClick={start}>
             {scenario.tutorial ? 'BEGIN GUIDED SESSION' : 'BEGIN SHIFT'} <span>↗</span>

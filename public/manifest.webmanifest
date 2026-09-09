@@ -1,7 +1,7 @@
 {
-  "name": "ANKARA CONTROL",
+  "name": "ANKARA CONTROL — Living Airspace",
   "short_name": "Ankara Control",
-  "description": "Unofficial T\u00fcrkiye Area Control Simulator",
+  "description": "Unofficial offline Living Airspace area control simulation",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

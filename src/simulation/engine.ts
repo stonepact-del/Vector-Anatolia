@@ -16,13 +16,28 @@ import type {
 } from '../domain/types';
 import { dataset, performance, scenarios } from '../data';
 import { pilotResponse } from './pilot';
+import { queueTransmission, radioDelay, stepRadio } from './communications';
+import { offerOutbound, stepCoordination, updateAdjacentSectors } from './adjacentSectors';
+import { buildAttention } from './attention';
+import { resolveRequest, stepRequests } from './requests';
+import { scheduleNextSpawn, trafficPhase } from './trafficDemand';
+import { simulatorWorkload } from './workload';
 import { validateDataset } from '../data/validation';
 import { applyMotionIntent } from './intent';
 import { advanceAircraft } from './aircraft';
 import { readback, validateCommand } from './commands';
-import { predictConflicts, segmentBreach, STCA_SECONDS, verticalMinimum } from './conflicts';
-import { distance, hash, sectorAt, STEP } from './math';
-export const ENGINE_VERSION = '1.0.0';
+import {
+  predictConflicts,
+  segmentBreach,
+  STCA_SECONDS,
+  trafficInteractions,
+  verticalMinimum,
+} from './conflicts';
+import { deltaHeading, distance, hash, sectorAt, STEP } from './math';
+export const ENGINE_VERSION = '2.0.0';
+export function challengeCode(scenarioId: string, seed: number, datasetVersion: string) {
+  return `TR-${String(seed).padStart(4, '0')}-${hash(`${scenarioId}:${seed}:${datasetVersion}`).slice(0, 4).toUpperCase()}`;
+}
 export function fraActive(utcMs: number, altitude = 35000, data: AIRACDataset = dataset) {
   return fraWindowActive(utcMs, altitude, data);
 }
@@ -87,6 +102,7 @@ export function createState(
         ]
       : [],
     conflicts: [],
+    interactions: [],
     alerts: [],
     events: [],
     nextEventId: 1,
@@ -105,6 +121,13 @@ export function createState(
       peakWorkload: 0,
       extraMiles: 0,
       delaySeconds: 0,
+      pilotRequests: 0,
+      approvedRequests: 0,
+      deniedRequests: 0,
+      handoffDelayTicks: 0,
+      transmissions: 0,
+      peakFrequencyLoad: 0,
+      unnecessaryInterventions: 0,
     },
     selectedSector: dataset.simulation.initialSector,
     combinedSectors: [dataset.simulation.initialSector],
@@ -115,7 +138,42 @@ export function createState(
     activeAlerts: [],
     activePredictions: [],
     fraActive: false,
+    transmissions: [],
+    pilotRequests: [],
+    adjacentSectors: dataset.sectors.map((sector) => ({
+      sectorId: sector.id,
+      workload: 0,
+      frequencyLoad: 0,
+      pendingInbound: 0,
+      pendingOutbound: 0,
+      configuration: 'OPEN',
+    })),
+    attention: [],
+    frequencyLoad: 0,
+    trafficPhase: 'QUIET',
+    trafficDemand: {
+      profile: {
+        id: `${scenario.id}-shift-curve`,
+        waves: [
+          { phase: 'QUIET', startRatio: 0, entryMultiplier: 0.65 },
+          { phase: 'BUILDING', startRatio: 0.15, entryMultiplier: 1 },
+          { phase: 'BUSY', startRatio: 0.35, entryMultiplier: 1.35 },
+          { phase: 'PEAK', startRatio: 0.58, entryMultiplier: 1.65 },
+          { phase: 'RECOVERY', startRatio: 0.78, entryMultiplier: 0.55 },
+        ],
+      },
+      entryRate: {
+        intervalSec: scenario.spawnIntervalSec,
+        nextTick: Math.round(scenario.spawnIntervalSec / STEP),
+      },
+      flowPressure: dataset.trafficFlows.map((flow) => ({ flowId: flow.id, value: flow.weight })),
+    },
+    nextTransmissionId: 1,
+    nextRequestId: 1,
+    nextSpawnTick: Math.round(scenario.spawnIntervalSec / STEP),
+    challengeCode: challengeCode(scenario.id, seed, dataset.version),
   };
+  scheduleNextSpawn(s);
   for (let i = 0; i < s.scenario.initialTraffic; i++) spawn(s, true);
   s.fraActive = fraActive(s.clock.startUtcMs, 35000, dataset);
   if (scenario.conflict) {
@@ -137,6 +195,16 @@ export function createState(
       ac.communication = 'CONTACT';
     }
   }
+  for (const a of s.aircraft.filter((a) => a.controlState === 'HANDOFF_OFFERED'))
+    queueTransmission(s, {
+      aircraftId: a.id,
+      speaker: 'SYSTEM',
+      type: 'HANDOFF',
+      text: `Inbound handoff offered: ${a.callsign}, ${a.typeId}, flight level ${a.altitudeFt / 100}.`,
+      priority: 'ATTENTION',
+    });
+  updateAdjacentSectors(s);
+  s.attention = buildAttention(s);
   event(s, 'START', `${scenario.name} · synthetic airspace · seed ${seed}`);
   return s;
 }
@@ -160,6 +228,15 @@ export function issueCommand(
   const error = validateCommand(intent, a, s, dataset);
   if (error) {
     s.metrics.rejected++;
+    if (error.startsWith('Unable') && a.communication === 'CONTACT')
+      queueTransmission(s, {
+        aircraftId: a.id,
+        speaker: 'PILOT',
+        type: 'READBACK',
+        text: `${a.callsign}, unable. ${error.replace(/^Unable:\s*/, '')}`,
+        priority: 'ATTENTION',
+        delayTicks: radioDelay(s, 'ATTENTION'),
+      });
     event(s, 'REJECTED', `${a.callsign}: ${error}`, a.id, 'WARNING');
     return { ok: false, error };
   }
@@ -175,9 +252,31 @@ export function issueCommand(
   };
   s.commands.push(command);
   s.metrics.clearances++;
-  const immediate = ['ACCEPT', 'IDENTIFY', 'TRANSFER', 'CONTACT', 'ACKNOWLEDGE'].includes(
-    intent.kind,
-  );
+  if (
+    ['CLIMB', 'DESCEND', 'LEVEL', 'HEADING', 'DIRECT', 'SPEED', 'MACH'].includes(intent.kind) &&
+    !s.conflicts.some((c) => c.aircraftIds.includes(a.id)) &&
+    !s.pilotRequests.some((r) => r.aircraftId === a.id && r.status === 'PENDING') &&
+    a.history.some((h) => s.clock.tick - h.command.tick < 80)
+  )
+    s.metrics.unnecessaryInterventions++;
+  const immediate = [
+    'ACCEPT',
+    'IDENTIFY',
+    'TRANSFER',
+    'CONTACT',
+    'ACKNOWLEDGE',
+    'APPROVE',
+    'DENY',
+  ].includes(intent.kind);
+  const controllerTx = queueTransmission(s, {
+    aircraftId: a.id,
+    speaker: intent.kind === 'TRANSFER' ? 'SYSTEM' : 'CONTROLLER',
+    type: intent.kind === 'TRANSFER' ? 'COORDINATION' : 'CLEARANCE',
+    text: readback(a, intent),
+    priority: intent.kind === 'ACKNOWLEDGE' ? 'URGENT' : 'ROUTINE',
+    delayTicks: radioDelay(s),
+    meaning: command.id,
+  });
   const clarification = !immediate && s.scenario.difficulty >= 2 && command.sequence % 11 === 10;
   if (clarification) {
     s.readbacks.push({
@@ -192,16 +291,27 @@ export function issueCommand(
       `${a.callsign}, say again clearance. Simulator repeats the instruction.`,
       a.id,
     );
+    queueTransmission(s, {
+      aircraftId: a.id,
+      speaker: 'PILOT',
+      type: 'READBACK',
+      text: `${a.callsign}, say again clearance.`,
+      priority: 'ATTENTION',
+      delayTicks: controllerTx.durationTicks + radioDelay(s, 'ATTENTION'),
+      meaning: `${command.id}:CLARIFICATION`,
+    });
   }
   a.history.push({
     command,
     status: 'QUEUED',
     message: readback(a, intent),
     executeTick:
-      s.clock.tick +
+      controllerTx.availableTick +
+      controllerTx.durationTicks +
       (immediate ? 1 : performance(a.typeId, s.dataset).responseTicks) +
       (clarification ? 8 : 0),
   });
+  if (!immediate && a.controlState === 'CONTROLLED') a.controlState = 'CLEARANCE_PENDING';
   a.lastCommunicationTick = s.clock.tick;
   event(s, 'CLEARANCE', readback(a, intent), a.id);
   return { ok: true, command };
@@ -209,72 +319,80 @@ export function issueCommand(
 function execute(s: SimulationState, a: Aircraft, c: Clearance) {
   const value = c.value;
   applyMotionIntent(a, c);
+  if (
+    ['CLIMB', 'DESCEND', 'LEVEL', 'HEADING', 'DIRECT', 'RESUME', 'SPEED', 'MACH'].includes(c.kind)
+  ) {
+    const request = [...s.pilotRequests]
+      .reverse()
+      .find((r) => r.aircraftId === a.id && r.status === 'PENDING');
+    if (request) {
+      request.status = 'MODIFIED';
+      request.responseTick = s.clock.tick;
+      s.metrics.approvedRequests++;
+      event(
+        s,
+        'REQUEST_MODIFIED',
+        `${a.callsign} request answered with an amended clearance.`,
+        a.id,
+      );
+    }
+  }
   switch (c.kind) {
     case 'CLIMB':
     case 'DESCEND':
     case 'LEVEL':
-      if (s.scenario.tutorial && s.tutorialStep === 2) s.tutorialStep = 3;
+      if (s.scenario.tutorial && s.tutorialStep === 3) s.tutorialStep = 4;
       break;
     case 'DIRECT':
       if (a.emergency.kind === 'WEATHER' || a.emergency.kind === 'MEDICAL')
         a.emergency.acknowledged = true;
-      if (s.scenario.tutorial && s.tutorialStep === 3) s.tutorialStep = 4;
+      if (s.scenario.tutorial && s.tutorialStep === 4) s.tutorialStep = 5;
       break;
     case 'ACCEPT':
       a.owner = c.actor;
-      a.controlState = 'ACCEPTED';
-      if (a.communication !== 'FAILED') a.communication = 'CONTACT';
+      a.controlState = 'HANDOFF_ACCEPTED';
+      if (a.communication !== 'FAILED') a.communication = 'PENDING';
+      if (a.handoff) {
+        a.handoff.state = 'AGREED';
+        a.handoff.acceptedTick = s.clock.tick;
+      }
       if (s.scenario.tutorial && s.tutorialStep === 0) s.tutorialStep = 1;
       break;
     case 'IDENTIFY':
       a.identification = 'IDENTIFIED';
       a.controlState = 'CONTROLLED';
-      if (s.scenario.tutorial && s.tutorialStep === 1) s.tutorialStep = 2;
+      a.communication = 'CONTACT';
+      if (s.scenario.tutorial && s.tutorialStep === 2) s.tutorialStep = 3;
       break;
     case 'TRANSFER':
-      a.handoff = {
-        from: a.owner,
-        to: String(value),
-        state: 'AGREED',
-        initiatedTick: s.clock.tick,
-        acceptedTick: s.clock.tick,
-      };
-      a.controlState = 'TRANSFER_INITIATED';
+      offerOutbound(s, a, String(value));
       break;
     case 'CONTACT':
       if (a.handoff) {
         a.owner = a.handoff.to;
         a.handoff.state = 'COMPLETE';
-        a.controlState = 'TRANSFERRED';
+        a.controlState = 'FREQUENCY_CHANGE';
         a.communication = 'OTHER';
         s.metrics.goodHandoffs++;
         s.metrics.handled++;
         event(s, 'HANDOFF', `${a.callsign} transferred to ${a.owner}.`, a.id);
-        if (s.scenario.tutorial && s.tutorialStep >= 4) s.tutorialStep = 5;
+        if (s.scenario.tutorial && s.tutorialStep >= 9) s.tutorialStep = 10;
       }
       break;
     case 'ACKNOWLEDGE':
       a.emergency.acknowledged = true;
       break;
+    case 'APPROVE':
+      resolveRequest(s, a, true);
+      if (s.scenario.tutorial && s.tutorialStep === 6) s.tutorialStep = 7;
+      break;
+    case 'DENY':
+      resolveRequest(s, a, false);
+      break;
   }
 }
 export function workload(s: SimulationState, sector = s.selectedSector) {
-  const a = s.aircraft.filter((a) => a.owner === sector || a.sectorId === sector);
-  return Math.min(
-    100,
-    Math.round(
-      a.length * 3 +
-        a.filter((a) => a.controlState === 'INBOUND').length * 4 +
-        s.conflicts.filter((c) => c.aircraftIds.some((id) => a.some((ac) => ac.id === id))).length *
-          9 +
-        a.filter((a) => a.verticalMode !== 'LEVEL').length * 2 +
-        a.filter((a) => a.nextSector && a.nextSector !== sector).length * 2 +
-        a.filter((a) => a.emergency.kind !== 'NONE' && !a.emergency.resolved).length * 8 +
-        a.filter((a) => s.clock.tick - a.lastCommunicationTick < 120 && a.lastCommunicationTick > 0)
-          .length *
-          2,
-    ),
-  );
+  return simulatorWorkload(s, sector);
 }
 export function step(s: SimulationState) {
   const dataset = s.dataset;
@@ -282,29 +400,146 @@ export function step(s: SimulationState) {
   if (s.complete) return;
   s.clock.tick++;
   const tick = s.clock.tick;
+  stepRadio(s);
   const before = new Map(
     s.aircraft.map((a) => [a.id, { p: { ...a.position }, alt: a.altitudeFt }]),
   );
   for (const a of s.aircraft) {
-    for (const h of a.history.filter((h) => h.status === 'QUEUED' && h.executeTick! <= tick)) {
-      const response = pilotResponse(a, h.command, tick);
+    for (const h of a.history.filter(
+      (h) =>
+        (h.status === 'QUEUED' &&
+          h.executeTick! <= tick &&
+          s.transmissions.some(
+            (tx) =>
+              tx.meaning === h.command.id && tx.speaker !== 'PILOT' && tx.status === 'COMPLETE',
+          )) ||
+        (h.status === 'READBACK_PENDING' &&
+          s.transmissions.some(
+            (tx) =>
+              tx.meaning === h.command.id && tx.type === 'READBACK' && tx.status === 'COMPLETE',
+          )),
+    )) {
       if (
-        s.readbacks.some((r) => r.clearanceId === h.command.id && r.state === 'CLARIFY') &&
-        response.state === 'CORRECT'
-      )
-        response.state = 'CORRECTED';
-      s.readbacks.push(response);
-      if (a.communication === 'FAILED' && !['ACKNOWLEDGE', 'ACCEPT'].includes(h.command.kind)) {
+        h.status === 'QUEUED' &&
+        !['ACCEPT', 'TRANSFER', 'ACKNOWLEDGE'].includes(h.command.kind)
+      ) {
+        if (a.communication === 'FAILED') {
+          h.status = 'REJECTED';
+          h.message = 'Unable to deliver: communication failure.';
+          event(s, 'UNABLE', `${a.callsign}, no response.`, a.id, 'WARNING');
+          continue;
+        }
+        const response = pilotResponse(a, h.command, tick);
+        if (
+          s.readbacks.some((r) => r.clearanceId === h.command.id && r.state === 'CLARIFY') &&
+          response.state === 'CORRECT'
+        )
+          response.state = 'CORRECTED';
+        s.readbacks.push(response);
+        const tx = queueTransmission(s, {
+          aircraftId: a.id,
+          speaker: 'PILOT',
+          type: 'READBACK',
+          text: response.text,
+          priority: 'ROUTINE',
+          delayTicks: radioDelay(s),
+          meaning: h.command.id,
+        });
+        h.status = 'READBACK_PENDING';
+        h.executeTick = tx.availableTick + tx.durationTicks;
+        a.controlState = 'READBACK_PENDING';
+        continue;
+      }
+      if (
+        h.status !== 'READBACK_PENDING' &&
+        !['ACCEPT', 'TRANSFER', 'ACKNOWLEDGE'].includes(h.command.kind)
+      ) {
+        const response = pilotResponse(a, h.command, tick);
+        if (
+          s.readbacks.some((r) => r.clearanceId === h.command.id && r.state === 'CLARIFY') &&
+          response.state === 'CORRECT'
+        )
+          response.state = 'CORRECTED';
+        s.readbacks.push(response);
+      }
+      if (h.status === 'READBACK_PENDING') h.executeTick = tick;
+      const completedReadback = [...s.readbacks]
+        .reverse()
+        .find((response) => response.clearanceId === h.command.id);
+      if (h.status === 'READBACK_PENDING' && completedReadback?.state === 'UNABLE') {
+        h.status = 'REJECTED';
+        h.message = completedReadback.text;
+        a.controlState = 'MONITORING';
+        event(s, 'UNABLE', completedReadback.text, a.id, 'WARNING');
+        continue;
+      }
+      if (
+        h.status !== 'READBACK_PENDING' &&
+        a.communication === 'FAILED' &&
+        !['ACKNOWLEDGE', 'ACCEPT'].includes(h.command.kind)
+      ) {
         h.status = 'REJECTED';
         h.message = 'Unable to deliver: communication failure.';
         event(s, 'UNABLE', `${a.callsign}, no response.`, a.id, 'WARNING');
       } else {
         execute(s, a, h.command);
         h.status = 'EXECUTED';
-        event(s, 'READBACK', h.message, a.id);
+        if (
+          ['CLIMB', 'DESCEND', 'LEVEL', 'HEADING', 'DIRECT', 'RESUME', 'SPEED', 'MACH'].includes(
+            h.command.kind,
+          )
+        )
+          a.controlState = 'EXECUTING';
+        event(
+          s,
+          ['ACCEPT', 'TRANSFER'].includes(h.command.kind)
+            ? 'COORDINATION'
+            : h.command.kind === 'ACKNOWLEDGE'
+              ? 'ACKNOWLEDGED'
+              : 'READBACK',
+          h.message,
+          a.id,
+        );
       }
     }
     advanceAircraft(a, dataset, STEP);
+    if (a.controlState === 'HANDOFF_ACCEPTED' && tick - (a.handoff?.acceptedTick ?? tick) >= 4) {
+      a.controlState = 'AWAITING_INITIAL_CONTACT';
+      queueTransmission(s, {
+        aircraftId: a.id,
+        speaker: 'PILOT',
+        type: 'INITIAL_CALL',
+        text: `${a.callsign}, flight level ${Math.round(a.altitudeFt / 100)}, checking in.`,
+        priority: 'ATTENTION',
+        delayTicks: 6 + radioDelay(s, 'ATTENTION'),
+        meaning: 'INITIAL_CONTACT',
+      });
+    }
+    if (
+      a.controlState === 'EXECUTING' &&
+      a.verticalMode === 'LEVEL' &&
+      Math.abs(a.altitudeFt - a.clearedAltitudeFt) < 1 &&
+      (a.assignedHeadingDeg === null ||
+        Math.abs(deltaHeading(a.headingDeg, a.assignedHeadingDeg)) < 1) &&
+      (a.assignedSpeed === null ||
+        (a.assignedSpeed.unit === 'IAS'
+          ? Math.abs(a.iasKt - a.assignedSpeed.value) < 1
+          : Math.abs(a.mach - a.assignedSpeed.value) < 0.005))
+    )
+      a.controlState = 'MONITORING';
+    const initialCall = s.transmissions.find(
+      (t) => t.aircraftId === a.id && t.meaning === 'INITIAL_CONTACT',
+    );
+    if (a.controlState === 'AWAITING_INITIAL_CONTACT' && initialCall?.status === 'COMPLETE') {
+      a.controlState = 'INITIAL_CONTACT';
+      a.communication = 'CONTACT';
+      a.identification = 'CORRELATED';
+      a.lastCommunicationTick = tick;
+      event(s, 'INITIAL_CALL', initialCall.text, a.id);
+      if (s.scenario.tutorial && s.tutorialStep === 1) s.tutorialStep = 2;
+    }
+    if (a.controlState === 'FREQUENCY_CHANGE' && tick - a.lastCommunicationTick > 20)
+      a.controlState = 'TRANSFERRED';
     if (
       a.emergency.kind === 'WEATHER' &&
       a.emergency.acknowledged &&
@@ -320,6 +555,18 @@ export function step(s: SimulationState) {
     ) {
       a.emergency.resolved = true;
     }
+    if (
+      a.emergency.kind === 'PERFORMANCE' &&
+      a.emergency.acknowledged &&
+      Math.abs(a.altitudeFt - a.requestedAltitudeFt) < 100
+    )
+      a.emergency.resolved = true;
+    if (
+      a.emergency.kind === 'NAVIGATION' &&
+      a.emergency.acknowledged &&
+      a.navigationMode === 'ROUTE'
+    )
+      a.emergency.resolved = true;
     if (tick % 20 === 0) {
       a.trail.push({ ...a.position });
       if (a.trail.length > 12) a.trail.shift();
@@ -345,10 +592,18 @@ export function step(s: SimulationState) {
         );
       }
       if (s.combinedSectors.includes(sector.id) && !s.combinedSectors.includes(a.owner ?? '')) {
-        a.controlState = 'INBOUND';
+        a.controlState = 'HANDOFF_OFFERED';
         a.communication = 'PENDING';
         a.identification = 'CORRELATED';
         a.owner = null;
+        a.handoff = { from: prior, to: sector.id, state: 'REQUESTED', initiatedTick: tick };
+        queueTransmission(s, {
+          aircraftId: a.id,
+          speaker: 'SYSTEM',
+          type: 'HANDOFF',
+          text: `Inbound handoff offered: ${a.callsign} from ${prior}.`,
+          priority: 'ATTENTION',
+        });
         event(s, 'INBOUND', `${a.callsign}, inbound to ${sector.name}.`, a.id);
       } else if (
         !s.combinedSectors.includes(a.owner ?? '') &&
@@ -361,11 +616,13 @@ export function step(s: SimulationState) {
     if (tick % 4 === 0) a.nextSector = nextSectorAlongIntent(a, dataset);
   }
   if (
-    tick % Math.max(1, Math.round(s.scenario.spawnIntervalSec / STEP)) === 0 &&
+    tick >= s.nextSpawnTick &&
     tick * STEP < s.scenario.durationSec - 120 &&
     s.aircraft.length < 350
-  )
+  ) {
     spawn(s);
+    scheduleNextSpawn(s);
+  }
   for (const se of s.scenario.events) {
     if (tick === Math.round(se.atSec / STEP)) {
       const a = s.aircraft.find((a) => a.id === `AC${String(se.aircraftIndex).padStart(5, '0')}`);
@@ -377,10 +634,33 @@ export function step(s: SimulationState) {
           a.flightPlan.exitPoint = dataset.simulation.medicalFix;
           a.requestedAltitudeFt = 25000;
         }
+        if (se.kind === 'FUEL') {
+          a.requestedAltitudeFt = Math.min(a.clearedAltitudeFt, 29000);
+          a.emergency.kind = 'MINIMUM_FUEL';
+        }
+        if (se.kind === 'PERFORMANCE') {
+          a.assignedSpeed = { unit: 'IAS', value: Math.max(210, Math.round(a.iasKt - 30)) };
+          a.requestedAltitudeFt = Math.min(a.clearedAltitudeFt, 31000);
+        }
+        if (se.kind === 'WEATHER') a.emergency.kind = 'WEATHER';
+        if (se.kind === 'NAVIGATION') {
+          a.navigationMode = 'HEADING';
+          a.assignedHeadingDeg = a.headingDeg;
+        }
+        queueTransmission(s, {
+          aircraftId: a.id,
+          speaker: se.kind === 'COMMS' ? 'SYSTEM' : 'PILOT',
+          type: 'ABNORMAL',
+          text:
+            se.kind === 'COMMS'
+              ? `${a.callsign}: no radio response; communication failure indicated.`
+              : `${a.callsign}, ${se.kind === 'MEDICAL' ? `PAN PAN, medical priority, request diversion via ${dataset.simulation.medicalFix}` : se.kind === 'WEATHER' ? 'request deviation due weather' : se.kind === 'FUEL' ? 'minimum fuel, request priority handling' : se.kind === 'NAVIGATION' ? 'navigation degraded, request return to route' : 'unable normal performance, request lower level'}.`,
+          priority: se.kind === 'MEDICAL' ? 'URGENT' : 'ATTENTION',
+        });
         event(
           s,
           'ABNORMAL',
-          `${a.callsign}: ${se.kind === 'COMMS' ? 'Communication failure. Protect last accepted intent.' : se.kind === 'MEDICAL' ? `PAN PAN, medical urgency. Request diversion via ${dataset.simulation.medicalFix} and lower level.` : se.kind === 'WEATHER' ? 'Request deviation around weather.' : 'Unable normal performance.'}`,
+          `${a.callsign}: ${se.kind === 'COMMS' ? 'Communication failure. Protect last accepted intent.' : se.kind === 'MEDICAL' ? `PAN PAN, medical urgency. Request diversion via ${dataset.simulation.medicalFix} and lower level.` : se.kind === 'WEATHER' ? 'Request deviation around weather.' : se.kind === 'NAVIGATION' ? 'Navigation degraded. Return-to-route request expected.' : 'Unable normal performance.'}`,
           a.id,
           'WARNING',
         );
@@ -400,6 +680,15 @@ export function step(s: SimulationState) {
         a.emergency = { kind: 'WEATHER', declaredTick: tick, acknowledged: false, resolved: false };
         event(s, 'WEATHER', `${a.callsign}, request deviation due weather.`, a.id, 'WARNING');
       }
+  stepRequests(s);
+  if (s.scenario.tutorial && s.tutorialStep === 7 && tick % 40 === 0) s.tutorialStep = 8;
+  stepCoordination(s);
+  if (
+    s.scenario.tutorial &&
+    s.tutorialStep === 8 &&
+    s.aircraft.some((a) => a.controlState === 'TRANSFER_ACCEPTED')
+  )
+    s.tutorialStep = 9;
   const currentLosses: string[] = [];
   for (let i = 0; i < s.aircraft.length; i++)
     for (let j = i + 1; j < s.aircraft.length; j++) {
@@ -432,6 +721,7 @@ export function step(s: SimulationState) {
     }
   s.activeLosses = currentLosses;
   if (tick % 4 === 0) {
+    s.interactions = trafficInteractions(s.aircraft);
     s.conflicts = predictConflicts(s.aircraft, dataset, true, tick);
     const relevant = (ids: string[]) =>
       ids.some((id) =>
@@ -469,6 +759,9 @@ export function step(s: SimulationState) {
       s.metrics.peakWorkload,
       ...s.combinedSectors.map((sec) => workload(s, sec)),
     );
+    updateAdjacentSectors(s);
+    s.trafficPhase = trafficPhase(s);
+    s.attention = buildAttention(s);
   }
   const active = fraActive(s.clock.startUtcMs + tick * STEP * 1000, 35000, dataset);
   if (active !== s.fraActive) {
@@ -550,7 +843,11 @@ export function changeSector(s: SimulationState, sector: string, combine = false
       sequence: s.actions.length,
     });
   s.selectedSector = sector;
-  s.combinedSectors = combine ? [...new Set([...s.combinedSectors, sector])] : [sector];
+  s.combinedSectors = combine
+    ? s.combinedSectors.includes(sector) && s.combinedSectors.length > 1
+      ? s.combinedSectors.filter((id) => id !== sector)
+      : [...new Set([...s.combinedSectors, sector])]
+    : [sector];
   for (const a of s.aircraft) {
     if (a.communication === 'FAILED') continue;
     if (s.combinedSectors.includes(a.owner ?? '')) {
@@ -558,7 +855,11 @@ export function changeSector(s: SimulationState, sector: string, combine = false
       if (a.controlState === 'TRANSFERRED') a.controlState = 'CONTROLLED';
     } else if (a.owner) a.communication = 'OTHER';
   }
-  event(s, 'POSITION', `Position ${sector}${combine ? ' combined' : ''}.`);
+  event(
+    s,
+    'POSITION',
+    `Position ${sector}${combine ? (s.combinedSectors.includes(sector) ? ' combined' : ' split') : ' selected'}.`,
+  );
 }
 export function finishShift(s: SimulationState, record = true) {
   if (s.complete) return;
@@ -603,11 +904,15 @@ export function replayTo(replay: Replay, tick = replay.finalTick): SimulationSta
 export const tutorialSteps = [
   {
     title: 'Accept inbound traffic',
-    text: 'Select the inbound THY flight. ACCEPT establishes communication and takes responsibility.',
+    text: 'Select the offered THY flight. ACCEPT confirms the modeled inbound handoff.',
+  },
+  {
+    title: 'Listen for initial contact',
+    text: 'The flight is expected but not yet established. Watch the radio queue for its initial call.',
   },
   {
     title: 'Establish identification',
-    text: 'Select IDENTIFY. This modeled correlation confirms the target before surveillance instructions.',
+    text: 'After the initial call, IDENTIFY confirms the correlated target before surveillance instructions.',
   },
   {
     title: 'Issue a level clearance',
@@ -618,11 +923,27 @@ export const tutorialSteps = [
     text: 'Open DIRECT and select SIMCA. The aircraft turns gradually toward the fix.',
   },
   {
-    title: 'Coordinate and transfer',
-    text: 'Open TRANSFER, choose adjacent CENTRAL (S3), then CONTACT. Ownership changes only on completed transfer.',
+    title: 'Listen for a request',
+    text: 'Aircraft requests arise from its flight state. Monitor ATTENTION and RADIO instead of a scripted popup.',
   },
   {
-    title: 'Orientation complete',
-    text: 'You have completed the control cycle. Continue practicing or finish the shift to review your report.',
+    title: 'Respond to the pilot',
+    text: 'Approve or deny the pending request. The response changes the flight state and radio occupancy.',
+  },
+  {
+    title: 'Monitor the result',
+    text: 'Readbacks complete before execution. Watch the cleared level, trajectory and planning conflicts.',
+  },
+  {
+    title: 'Coordinate outbound',
+    text: 'Open TRANSFER and offer the flight to its adjacent sector. Acceptance time depends on that sector workload.',
+  },
+  {
+    title: 'Complete the transfer',
+    text: 'When ATTENTION shows TRANSFER ACCEPTED, instruct CONTACT. Responsibility changes after the frequency change.',
+  },
+  {
+    title: 'Control cycle complete',
+    text: 'You handled the full inbound, contact, clearance, request and outbound sequence. Continue or review the shift.',
   },
 ];

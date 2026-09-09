@@ -4,7 +4,7 @@ All numerical models below are entertainment approximations, not certified aviat
 
 ## Space, time and determinism
 
-The original synthetic plane spans 800 × 380 nautical miles. Its schematic outline suggests Anatolia without representing official borders. Aircraft fly between explicitly fictional fixes. Geographic haversine utilities are tested separately; synthetic map motion uses Euclidean nautical miles and nautical headings (north 000°, east 090°).
+The local plane spans 800 × 380 modeled nautical miles. A Türkiye outline extracted from Natural Earth 1:110m public-domain country data is rounded and projected with a Türkiye-centered equirectangular approximation. This makes geographic orientation recognizable; it is not a legal boundary or navigation product. Four approximate regional labels aid orientation. Aircraft still fly between explicitly fictional fixes and through modeled sectors. Motion uses Euclidean nautical miles and nautical headings (north 000°, east 090°).
 
 The worker owns a 250 ms fixed step. Speed controls change the number of steps scheduled, never the integrator. The wall-time scheduler clamps single stalls to 0.5 seconds and does not skip domain steps. Heavy processing can therefore reduce effective real-time speed. Hidden tabs automatically pause. Rendering does not consume the traffic random generator or mutate simulation state.
 
@@ -16,13 +16,13 @@ Five original performance categories cover regional jets, narrowbodies, widebodi
 
 Turns are rate-limited. Climb and descent depend on category and altitude, with explicit target capture. Acceleration is gradual. IAS is converted through a simplified atmosphere density relationship; Mach uses a temperature-based sound speed. Groundspeed and track include a fixed modeled 12-knot easterly-moving wind vector. Performance targets are bounded by the modeled Mach limit. Weather does not fetch or reproduce real winds.
 
-A motion clearance normally takes three simulation seconds to execute. Correct/readback, unable, clarification and corrected response records are deterministic. In challenging scenarios, every eleventh eligible command can trigger a modeled say-again exchange and two additional seconds of delay; the simulator automatically repeats the original instruction. This is a workload approximation, not a professional phraseology assessment.
+A motion clearance is transmitted through the frequency queue, received, read back, evaluated, and then executed. Controller, pilot and system/coordination transmissions are separate records. Their duration derives from structured template length; safety and urgency traffic has priority. The rolling one-minute occupied time plus queued traffic produces frequency load. Correct, unable, clarification and corrected outcomes are deterministic. In challenging scenarios, every eleventh eligible command can trigger a modeled say-again exchange. This is a workload abstraction, not professional phraseology assessment.
 
 ## Control and coordination
 
-The first guided flight starts inbound. ACCEPT establishes exclusive ownership and communication; IDENTIFY confirms the correlated target; control clearances then become available. TRANSFER initiates coordination with an adjacent sector; CONTACT commits the new owner. A geographic boundary crossing alone never grants ownership to the player.
+The controller-facing sequence is approaching/advance notification → handoff offered → handoff accepted → awaiting initial contact → initial contact/correlation → identification → active control/monitoring. An adjacent-owned flight whose intent first enters the player's sector receives a timed advance-notification state before the actionable offer. ACCEPT confirms the modeled inbound handoff and reserves exclusive ownership, but the target does not become eligible for surveillance clearances until its queued initial call completes and IDENTIFY establishes the modeled radar-contact state.
 
-The receiving side of coordination is simplified and agrees automatically. Surrounding flights follow their filed intent with basic ownership bookkeeping; there is no full neighboring-controller tactical intelligence. Sector layers are represented as FL140–305 and FL305–460; V1 positions combine both layers, so there is no separately staffed vertical-layer handoff.
+Outbound TRANSFER creates a coordination request. The adjacent-sector state machine derives its load from traffic, conflicts and pending transfers, then schedules deterministic acceptance; high load delays rather than randomly rejects. CONTACT becomes available after acceptance and changes ownership only after the frequency-change transmission. A boundary crossing alone never grants ownership. Neighboring sectors do not solve traffic tactically, so this remains a modeled coordination agent rather than controller AI. Network controls can take, combine and split modeled positions.
 
 Initial traffic is checked for a separated entry slot. A flight that cannot be placed within its category envelope is delayed/withheld, rather than spawned inside a separation loss. Authored conflict scenarios introduce converging traffic with intervention time.
 
@@ -30,7 +30,7 @@ Initial traffic is checked for a separated entry slot. A flight that cannot be p
 
 Horizontal infringement is strictly less than 5 NM. Vertical infringement is strictly below the applicable modeled minimum: 1,000 ft below FL290, 1,000 ft for eligible RVSM pairs wholly within FL290–410, otherwise 2,000 ft. Mixed band pairs receive the conservative larger requirement. Current trajectories are swept between physics ticks, preventing an endpoint-only missed crossing.
 
-Prediction advances cloned aircraft with the same 250 ms motion model and accepted queued intents, sampling relative segments every five seconds over a five-minute horizon. Swept segment checks estimate first infringement and closest approach. A conservative spatial grid sized from maximum modeled reach, followed by distance pruning and swept trajectory bounds reduce candidate pairs; tests compare optimized results against an unfiltered oracle.
+Prediction advances cloned aircraft with the same intent/performance equations using deterministic one-second coarse integration, sampling relative segments every five seconds over a five-minute horizon. Swept segment checks catch crossings between samples and estimate first infringement/closest approach. A conservative reach grid, distance pruning, per-aircraft trajectory caching within a pass and swept bounds limit fine pair checks; tests compare the filtered result with an unfiltered oracle. Prediction runs each simulated second while actual loss monitoring remains at every 250 ms physics step.
 
 STCA is a separate modeled 120-second horizon. Alert episodes are counted at onset, not every tick. Prediction is conditional on current intent; unissued future controller actions, future abnormal events and future traffic spawns are not known to it. Five-second trajectory segments approximate continuously turning paths. No automatic conflict-resolution recommendation is offered.
 
@@ -44,26 +44,34 @@ Routes enforce synthetic entry/exit/intermediate point roles, activation effecti
 
 ## Abnormalities and weather
 
-Communication failure retains last accepted intent and blocks radio clearance execution. Medical urgency changes the requested destination to LTAC and requests routing through synthetic SIMCB plus a lower level; player commands execute the diversion. Cells move procedurally and generate deviation requests when traffic approaches. A direct clearance acknowledges the route response, but a weather abnormal remains unresolved until the aircraft is outside the cell margin. A medical diversion requires routing toward the requested diversion fix and a compatible lower cleared level. No pilot emergency checklist is provided. Minimum fuel and fuel emergency are distinct domain states; the shipped abnormal missions are communication failure and medical diversion.
+Communication failure retains last accepted intent and blocks radio clearance delivery. Medical urgency changes destination/requested routing and enters the priority radio/request queues. Fuel state asks for priority and a lower level; degraded performance reduces the usable target; navigation degradation preserves heading instead of continuing route navigation. Moving weather cells cause requests only when route/aircraft proximity warrants it. Approving, denying or modifying a request changes its state and trajectory as applicable. Weather remains unresolved until clear of the modeled margin, and medical diversion requires compatible route and level. These model the controller-side consequences only; no aircraft checklist is provided.
+
+## Traffic demand and causal events
+
+Every shift has a deterministic demand profile: QUIET (0–15%), BUILDING (15–35%), BUSY (35–58%), PEAK (58–78%), then RECOVERY. The phase scales entry interval while seeded jitter prevents mechanical spacing. Scenario families increase pressure on matching synthetic flows without using schedules. Entry placement still withholds traffic when no separated level is available.
+
+Scenario records establish initial weather or abnormal conditions. Consequences are condition-driven: moving weather near a controlled route creates a request; requests and clearances occupy the radio; radio backlog delays routine exchanges; adjacent load delays transfer acceptance; unresolved transfers and requests add workload. No module calls `Math.random`; state and the seeded generator reproduce the chain.
 
 ## Workload and report
 
 SIMULATOR WORKLOAD is a clamped 0–100 sum, computed per sector:
 
-- 3 per owned or geographically present aircraft;
-- 4 per inbound flight;
-- 9 per relevant predicted conflict;
-- 2 per vertical change;
-- 2 per flight with a next-sector transition;
-- 8 per unresolved abnormal flight;
-- 2 per aircraft with a transmission in the preceding 30 seconds.
+- 3 per aircraft owned by the sector;
+- 4 per approaching, offered, awaiting-contact or initial-calling flight;
+- 6 per pending pilot request;
+- 2 per queued or transmitting relevant radio item;
+- 9 per predicted conflict;
+- 5 per outbound coordination awaiting acceptance;
+- 2 per boundary/next-sector pressure item;
+- 9 per unresolved abnormal aircraft;
+- 18% of current frequency-load percentage.
 
-This is not a DHMİ workload model. Any separation loss produces NOT PASSED regardless of efficiency. The report displays handled flights, alert episodes, prediction disappearance, handoffs, workload, clearances and excess track miles. Prediction disappearance is not proof of a player-caused resolution. Delay and extra miles are approximate endpoint metrics for exited flights, relative to initial straight-line transit; they are not operational schedule-delay estimates.
+The sum is clamped to 100 and is not a DHMİ workload model. Adjacent sectors use a separate bounded load formula, preventing the player's workload from directly feeding itself. Any separation loss produces NOT PASSED regardless of efficiency. The report presents Safety, Flow and Efficiency indices plus traffic, request handling, radio peak, mean handoff delay, interventions and a replay-derived major-event timeline. Prediction disappearance is not proof of a player-caused resolution. Delay and extra miles remain approximate simulation metrics.
 
 ## Measured performance and limits
 
-A 300-aircraft engine benchmark is included in `tests/performance.test.ts`. On this container, optimization reduced a five-minute forecast from approximately 1.8 seconds to approximately 0.5 seconds; a one-simulation-second advance with prediction took approximately 0.55 seconds in that run. Timings depend on host load. The worker keeps this work off the UI thread, but 300 aircraft at 4× is not a guaranteed real-time target. Shipped scenarios use substantially lower traffic counts.
+The benchmark in `tests/performance.test.ts` records 50/100/200/300-aircraft passes. On the final September 2026 verification run, isolated forecast measurements were 54/90/153/154 ms and one simulated second for 300 aircraft was 205 ms. Shared-host scheduling noise can make individual points non-monotonic. The previous 250 ms forecast integrator measured about 1.3 seconds at 300 aircraft on the same project host, so the coarse/swept design is measurably faster. Timings vary with load and are measurements, not guarantees. The worker keeps prediction off the UI thread; shipped scenarios use substantially lower counts.
 
 Renderer geometry and label content are rebuilt on state/view changes rather than every display frame. PixiJS draws the retained scene independently. Screenshot verification uses software-rendered Chromium in this environment; native GPU performance will differ.
 
-Scenario progression requires a safe full shift, or completion of all guided tutorial actions. Ending an unfinished shift still produces a report/replay but does not unlock the next scenario. Practice mode makes all content available without changing procedures.
+Scenario progression requires a safe full shift, or completion of all guided tutorial actions. The tutorial now covers inbound acceptance, initial call, identification, clearance/readback, pilot request, monitoring and delayed outbound transfer. Ending early still produces a report/replay but does not unlock progression. Practice mode makes all content available without changing the engine.

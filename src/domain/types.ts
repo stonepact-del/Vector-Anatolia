@@ -58,16 +58,21 @@ export interface ControllerPosition {
   sectorId: string;
 }
 export type AircraftControlState =
-  | 'PLANNED'
-  | 'INBOUND'
-  | 'COORDINATED'
-  | 'TRANSFER_PENDING'
-  | 'ACCEPTED'
-  | 'IDENTIFIED'
+  | 'APPROACHING_SECTOR'
+  | 'HANDOFF_OFFERED'
+  | 'HANDOFF_ACCEPTED'
+  | 'AWAITING_INITIAL_CONTACT'
+  | 'INITIAL_CONTACT'
   | 'CONTROLLED'
-  | 'TRANSFER_INITIATED'
-  | 'TRANSFERRED'
-  | 'RELEASED';
+  | 'REQUEST_PENDING'
+  | 'CLEARANCE_PENDING'
+  | 'READBACK_PENDING'
+  | 'EXECUTING'
+  | 'MONITORING'
+  | 'OUTBOUND_COORDINATION'
+  | 'TRANSFER_ACCEPTED'
+  | 'FREQUENCY_CHANGE'
+  | 'TRANSFERRED';
 export type RadarIdentificationState = 'UNKNOWN' | 'CORRELATED' | 'IDENTIFIED' | 'LOST';
 export type CommunicationState = 'CONTACT' | 'PENDING' | 'FAILED' | 'OTHER';
 export type CoordinationState = 'NONE' | 'REQUESTED' | 'AGREED' | 'COMPLETE';
@@ -77,6 +82,81 @@ export interface Handoff {
   state: CoordinationState;
   initiatedTick: number;
   acceptedTick?: number;
+  availableTick?: number;
+  reason?: string;
+}
+export type TransmissionSpeaker = 'CONTROLLER' | 'PILOT' | 'SYSTEM';
+export type TransmissionType =
+  'HANDOFF' | 'INITIAL_CALL' | 'CLEARANCE' | 'READBACK' | 'REQUEST' | 'COORDINATION' | 'ABNORMAL';
+export type CommunicationPriority = 'ROUTINE' | 'ATTENTION' | 'URGENT' | 'SAFETY';
+export interface Transmission {
+  id: string;
+  aircraftId?: string;
+  speaker: TransmissionSpeaker;
+  type: TransmissionType;
+  createdTick: number;
+  availableTick: number;
+  durationTicks: number;
+  priority: CommunicationPriority;
+  text: string;
+  status: 'QUEUED' | 'TRANSMITTING' | 'COMPLETE' | 'CANCELLED';
+  meaning?: string;
+}
+export type PilotRequestKind =
+  'HIGHER' | 'LOWER' | 'DIRECT' | 'WEATHER' | 'RETURN_ROUTE' | 'DIVERSION';
+export interface PilotRequest {
+  id: string;
+  aircraftId: string;
+  kind: PilotRequestKind;
+  value?: number | string;
+  createdTick: number;
+  status: 'QUEUED' | 'TRANSMITTED' | 'PENDING' | 'APPROVED' | 'DENIED' | 'MODIFIED' | 'EXPIRED';
+  reason: string;
+  priority: CommunicationPriority;
+  responseTick?: number;
+}
+export interface AdjacentSectorState {
+  sectorId: string;
+  workload: number;
+  frequencyLoad: number;
+  pendingInbound: number;
+  pendingOutbound: number;
+  configuration: 'OPEN' | 'COMBINED';
+}
+export interface AttentionItem {
+  id: string;
+  aircraftId?: string;
+  kind:
+    | 'SAFETY'
+    | 'ABNORMAL'
+    | 'READBACK'
+    | 'INITIAL_CALL'
+    | 'PILOT_REQUEST'
+    | 'INBOUND_HANDOFF'
+    | 'OUTBOUND_TRANSFER'
+    | 'COORDINATION';
+  priority: number;
+  createdTick: number;
+  label: string;
+  detail: string;
+}
+export type TrafficPhase = 'QUIET' | 'BUILDING' | 'BUSY' | 'PEAK' | 'RECOVERY';
+export interface TrafficWave {
+  phase: TrafficPhase;
+  startRatio: number;
+  entryMultiplier: number;
+}
+export interface TrafficDemandProfile {
+  id: string;
+  waves: TrafficWave[];
+}
+export interface EntryRate {
+  intervalSec: number;
+  nextTick: number;
+}
+export interface FlowPressure {
+  flowId: string;
+  value: number;
 }
 export interface AircraftPerformanceProfile {
   id: string;
@@ -125,7 +205,9 @@ export type ClearanceKind =
   | 'IDENTIFY'
   | 'TRANSFER'
   | 'CONTACT'
-  | 'ACKNOWLEDGE';
+  | 'ACKNOWLEDGE'
+  | 'APPROVE'
+  | 'DENY';
 export interface Clearance {
   id: string;
   aircraftId: string;
@@ -144,7 +226,7 @@ export interface PilotReadback {
 }
 export interface ClearanceHistory {
   command: Clearance;
-  status: 'QUEUED' | 'EXECUTED' | 'REJECTED';
+  status: 'QUEUED' | 'READBACK_PENDING' | 'EXECUTED' | 'REJECTED';
   message: string;
   executeTick?: number;
 }
@@ -219,6 +301,12 @@ export interface Conflict extends ConflictPrediction {
   verticalFt: number;
   horizontalNm: number;
 }
+export interface TrafficInteraction {
+  id: string;
+  aircraftIds: [string, string];
+  horizontalNm: number;
+  verticalFt: number;
+}
 export interface SafetyNetAlert {
   id: string;
   aircraftIds: [string, string];
@@ -242,7 +330,7 @@ export interface WeatherCell extends Point {
 }
 export interface ScenarioEvent {
   atSec: number;
-  kind: 'COMMS' | 'MEDICAL' | 'WEATHER' | 'PERFORMANCE' | 'FUEL';
+  kind: 'COMMS' | 'MEDICAL' | 'WEATHER' | 'PERFORMANCE' | 'FUEL' | 'NAVIGATION';
   aircraftIndex: number;
 }
 export interface Scenario {
@@ -288,6 +376,9 @@ export interface AIRACDataset {
     orientationFlights: { route: string[]; position: Point; nextWaypoint: number }[];
     medicalDestination: string;
     medicalFix: string;
+    geographicOutline: Point[][];
+    geographicSource: { name: string; url: string; license: string; fidelity: Fidelity };
+    landmarks: { id: string; name: string; position: Point }[];
   };
   id: string;
   version: string;
@@ -320,6 +411,13 @@ export interface Metrics {
   peakWorkload: number;
   extraMiles: number;
   delaySeconds: number;
+  pilotRequests: number;
+  approvedRequests: number;
+  deniedRequests: number;
+  handoffDelayTicks: number;
+  transmissions: number;
+  peakFrequencyLoad: number;
+  unnecessaryInterventions: number;
 }
 export type RecordedAction = { tick: number; sequence: number } & (
   | { type: 'COMMAND'; intent: CommandIntent; source: 'UI' | 'TEXT' | 'REPLAY' }
@@ -339,6 +437,7 @@ export interface SimulationState {
   aircraft: Aircraft[];
   weather: WeatherCell[];
   conflicts: Conflict[];
+  interactions: TrafficInteraction[];
   alerts: SafetyNetAlert[];
   events: SimulationEvent[];
   nextEventId: number;
@@ -354,6 +453,21 @@ export interface SimulationState {
   activeAlerts: string[];
   activePredictions: string[];
   fraActive: boolean;
+  transmissions: Transmission[];
+  pilotRequests: PilotRequest[];
+  adjacentSectors: AdjacentSectorState[];
+  attention: AttentionItem[];
+  frequencyLoad: number;
+  trafficPhase: TrafficPhase;
+  trafficDemand: {
+    profile: TrafficDemandProfile;
+    entryRate: EntryRate;
+    flowPressure: FlowPressure[];
+  };
+  nextTransmissionId: number;
+  nextRequestId: number;
+  nextSpawnTick: number;
+  challengeCode: string;
 }
 export interface Replay {
   format: 1;

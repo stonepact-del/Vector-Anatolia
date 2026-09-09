@@ -11,6 +11,15 @@ export function ShiftReport({
   onReplayLibrary: () => void;
   onNextShift: () => void;
 }) {
+  const safety = Math.max(0, 100 - state.metrics.losses * 45 - state.metrics.stcaEpisodes * 8);
+  const flow = Math.max(
+    0,
+    Math.round(100 - state.metrics.missedHandoffs * 12 - state.metrics.delaySeconds / 60),
+  );
+  const efficiency = Math.max(
+    0,
+    Math.round(100 - state.metrics.extraMiles / 2 - state.metrics.unnecessaryInterventions * 3),
+  );
   return (
     <section className="report modal">
       <span className="eyebrow">POST-SHIFT REVIEW / {state.scenario.name}</span>
@@ -23,6 +32,17 @@ export function ShiftReport({
       <div className={`safety-result ${state.metrics.losses ? 'failed' : ''}`}>
         <span>SAFETY ASSESSMENT</span>
         <strong>{state.metrics.losses ? 'NOT PASSED' : 'SEPARATION MAINTAINED'}</strong>
+      </div>
+      <div className="debrief-scores">
+        <span>
+          SAFETY <b>{safety}</b>
+        </span>
+        <span>
+          FLOW <b>{flow}</b>
+        </span>
+        <span>
+          EFFICIENCY <b>{efficiency}</b>
+        </span>
       </div>
       <div className="report-metrics">
         {[
@@ -37,6 +57,15 @@ export function ShiftReport({
           ['Peak workload', `${state.metrics.peakWorkload} / 100`],
           ['Clearances', state.metrics.clearances],
           ['Extra track miles', state.metrics.extraMiles.toFixed(1)],
+          ['Pilot requests', `${state.metrics.approvedRequests} / ${state.metrics.pilotRequests}`],
+          ['Peak radio load', `${state.metrics.peakFrequencyLoad}%`],
+          [
+            'Mean handoff delay',
+            state.metrics.goodHandoffs
+              ? `${Math.round((state.metrics.handoffDelayTicks * 0.25) / state.metrics.goodHandoffs)}s`
+              : '—',
+          ],
+          ['Interventions', state.metrics.unnecessaryInterventions],
         ].map(([label, value]) => (
           <div key={label}>
             <strong>{value}</strong>
@@ -46,7 +75,20 @@ export function ShiftReport({
       </div>
       <div className="report-timeline">
         {state.events
-          .filter((e) => ['LOSS', 'STCA', 'ABNORMAL', 'HANDOFF', 'FRA'].includes(e.type))
+          .filter((e) =>
+            [
+              'LOSS',
+              'STCA',
+              'ABNORMAL',
+              'HANDOFF',
+              'FRA',
+              'REQUEST',
+              'REQUEST_APPROVED',
+              'REQUEST_DENIED',
+              'COORDINATION',
+              'INITIAL_CALL',
+            ].includes(e.type),
+          )
           .slice(-20)
           .map((e) => (
             <p key={e.id}>
@@ -55,7 +97,18 @@ export function ShiftReport({
             </p>
           ))}
         {!state.events.some((e) =>
-          ['LOSS', 'STCA', 'ABNORMAL', 'HANDOFF', 'FRA'].includes(e.type),
+          [
+            'LOSS',
+            'STCA',
+            'ABNORMAL',
+            'HANDOFF',
+            'FRA',
+            'REQUEST',
+            'REQUEST_APPROVED',
+            'REQUEST_DENIED',
+            'COORDINATION',
+            'INITIAL_CALL',
+          ].includes(e.type),
         ) && <p>No major events recorded.</p>}
       </div>
       <div className="modal-actions">

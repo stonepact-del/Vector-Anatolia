@@ -38,13 +38,17 @@ import {
 const ticks = (s: ReturnType<typeof createState>, n: number) => {
   for (let i = 0; i < n; i++) step(s);
 };
+const until = (s: ReturnType<typeof createState>, condition: () => boolean, limit = 400) => {
+  for (let i = 0; i < limit && !condition(); i++) step(s);
+  expect(condition()).toBe(true);
+};
 const controlled = () => {
   const s = createState(scenarios[0]);
   const a = s.aircraft[0];
   issueCommand(s, { callsign: a.callsign, kind: 'ACCEPT' });
-  step(s);
+  until(s, () => a.controlState === 'INITIAL_CONTACT');
   issueCommand(s, { callsign: a.callsign, kind: 'IDENTIFY' });
-  step(s);
+  until(s, () => a.identification === 'IDENTIFIED');
   return { s, a };
 };
 describe('geospatial primitives', () => {
@@ -59,8 +63,8 @@ describe('geospatial primitives', () => {
   it('handles polygon edges without gaps', () => {
     const p = dataset.sectors[0].polygon;
     expect(contains({ x: 0, y: 0 }, p)).toBe(true);
-    expect(contains({ x: 200, y: 190 }, p)).toBe(true);
-    expect(contains({ x: 200.0001, y: 190 }, p)).toBe(false);
+    expect(contains({ x: 180, y: 190 }, p)).toBe(true);
+    expect(contains({ x: 200, y: 190 }, p)).toBe(false);
     expect(sectorAt({ x: 200, y: 95 }, dataset.sectors, 'S2')?.id).toBe('S2');
     expect(sectorAt({ x: 200.0001, y: 95 }, dataset.sectors)?.id).toBe('S2');
   });
@@ -174,7 +178,13 @@ describe('separation and prediction', () => {
   it('deduplicates safety-net episodes', () => {
     const s = createState(scenarios.find((s) => s.id === 'transit')!);
     s.aircraft = s.aircraft.slice(0, 2);
-    s.aircraft[1].position.x = 270;
+    const [a, b] = s.aircraft;
+    a.position = { x: 300, y: 180 };
+    b.position = { x: 320, y: 180 };
+    a.altitudeFt = b.altitudeFt = a.clearedAltitudeFt = b.clearedAltitudeFt = 35000;
+    a.navigationMode = b.navigationMode = 'HEADING';
+    a.headingDeg = a.assignedHeadingDeg = 90;
+    b.headingDeg = b.assignedHeadingDeg = 270;
     ticks(s, 12);
     expect(s.alerts).toHaveLength(1);
     expect(s.metrics.stcaEpisodes).toBe(1);
@@ -201,12 +211,12 @@ describe('commands, readback and ownership', () => {
       a = s.aircraft[0];
     expect(issueCommand(s, { callsign: a.callsign, kind: 'CLIMB', value: 39000 }).ok).toBe(false);
     issueCommand(s, { callsign: a.callsign, kind: 'ACCEPT' });
-    step(s);
+    until(s, () => a.controlState === 'INITIAL_CONTACT');
     expect(a.owner).toBe('S2');
-    expect(a.controlState).toBe('ACCEPTED');
+    expect(a.controlState).toBe('INITIAL_CONTACT');
     expect(issueCommand(s, { callsign: a.callsign, kind: 'HEADING', value: 90 }).ok).toBe(false);
     issueCommand(s, { callsign: a.callsign, kind: 'IDENTIFY' });
-    step(s);
+    until(s, () => a.identification === 'IDENTIFIED');
     expect(a.identification).toBe('IDENTIFIED');
   });
   it('honors response delays and UI/text parity', () => {
@@ -221,8 +231,8 @@ describe('commands, readback and ownership', () => {
     ticks(x.s, 11);
     ticks(y.s, 11);
     expect(x.a.clearedAltitudeFt).not.toBe(target);
-    step(x.s);
-    step(y.s);
+    until(x.s, () => x.a.clearedAltitudeFt === target);
+    until(y.s, () => y.a.clearedAltitudeFt === target);
     expect(x.a.clearedAltitudeFt).toBe(target);
     expect(x.a.altitudeFt).toBe(y.a.altitudeFt);
     expect(x.a.position).toEqual(y.a.position);
@@ -241,18 +251,19 @@ describe('commands, readback and ownership', () => {
   it('transfers exactly one owner after contact', () => {
     const { s, a } = controlled();
     issueCommand(s, { callsign: a.callsign, kind: 'TRANSFER', value: 'S3' });
-    step(s);
+    until(s, () => a.controlState === 'OUTBOUND_COORDINATION');
     expect(a.owner).toBe('S2');
-    expect(a.controlState).toBe('TRANSFER_INITIATED');
+    expect(a.handoff?.state).toBe('REQUESTED');
+    until(s, () => a.controlState === 'TRANSFER_ACCEPTED');
     issueCommand(s, { callsign: a.callsign, kind: 'CONTACT' });
-    step(s);
+    until(s, () => a.owner === 'S3');
     expect(a.owner).toBe('S3');
     expect(a.handoff?.state).toBe('COMPLETE');
     expect(s.metrics.goodHandoffs).toBe(1);
   });
   it('records a missed boundary handoff', () => {
     const { s, a } = controlled();
-    a.position = { x: 399.99, y: 90 };
+    a.position = { x: 391.99, y: 90 };
     a.navigationMode = 'HEADING';
     a.headingDeg = 90;
     a.assignedHeadingDeg = 90;
@@ -393,7 +404,7 @@ it('does not resolve weather merely by issuing a direct clearance into the cell'
     resolved: false,
   };
   issueCommand(s, { callsign: a.callsign, kind: 'DIRECT', value: 'SIMCA' });
-  ticks(s, 12);
+  until(s, () => a.emergency.acknowledged);
   expect(a.emergency.acknowledged).toBe(true);
   expect(a.emergency.resolved).toBe(false);
 });
@@ -433,7 +444,7 @@ it('accepting a radio-failure aircraft cannot restore communication', () => {
   a.communication = 'FAILED';
   a.emergency = { kind: 'COMMS', declaredTick: 0, acknowledged: false, resolved: false };
   issueCommand(s, { callsign: a.callsign, kind: 'ACCEPT' });
-  step(s);
+  until(s, () => a.owner === 'S2');
   expect(a.owner).toBe('S2');
   expect(a.communication).toBe('FAILED');
 });

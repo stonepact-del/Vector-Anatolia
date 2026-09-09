@@ -1,4 +1,11 @@
-import type { Aircraft, AIRACDataset, Conflict, Point, SeparationRule } from '../domain/types';
+import type {
+  Aircraft,
+  AIRACDataset,
+  Conflict,
+  Point,
+  SeparationRule,
+  TrafficInteraction,
+} from '../domain/types';
 import { applyMotionIntent } from './intent';
 import { advanceAircraft } from './aircraft';
 import { clamp, distance } from './math';
@@ -33,21 +40,43 @@ export function separated(a: Aircraft, b: Aircraft, rule?: SeparationRule) {
     Math.abs(a.altitudeFt - b.altitudeFt) >= verticalMinimum(a, b, rule)
   );
 }
+export function trafficInteractions(aircraft: Aircraft[]): TrafficInteraction[] {
+  const result: TrafficInteraction[] = [];
+  for (let i = 0; i < aircraft.length; i++)
+    for (let j = i + 1; j < aircraft.length; j++) {
+      const horizontalNm = distance(aircraft[i].position, aircraft[j].position);
+      const verticalFt = Math.abs(aircraft[i].altitudeFt - aircraft[j].altitudeFt);
+      if (horizontalNm <= 18 && verticalFt < 2000)
+        result.push({
+          id: [aircraft[i].id, aircraft[j].id].sort().join('/'),
+          aircraftIds: [aircraft[i].id, aircraft[j].id],
+          horizontalNm,
+          verticalFt,
+        });
+    }
+  return result;
+}
 interface Sample {
   p: Point;
   alt: number;
 }
 function samples(aircraft: Aircraft, data: AIRACDataset, tick: number): Sample[] {
   const a = structuredClone(aircraft);
-  const queued = a.history.filter((h) => h.status === 'QUEUED');
+  const queued = a.history.filter((h) => h.status === 'QUEUED' || h.status === 'READBACK_PENDING');
   a.history = [];
   a.trail = [];
   const result: Sample[] = [{ p: { ...a.position }, alt: a.altitudeFt }];
-  for (let offset = 1; offset <= PREDICTION_SECONDS * 4; offset++) {
+  // One-second deterministic coarse integration. Candidate pairs are then checked with swept
+  // five-second segments, preserving crossings without running 1,200 physics updates per target.
+  for (let offset = 4; offset <= PREDICTION_SECONDS * 4; offset += 4) {
     for (const h of queued)
-      if (h.executeTick === tick + offset && a.communication !== 'FAILED')
+      if (
+        h.executeTick! > tick + offset - 4 &&
+        h.executeTick! <= tick + offset &&
+        a.communication !== 'FAILED'
+      )
         applyMotionIntent(a, h.command);
-    advanceAircraft(a, data, 0.25);
+    advanceAircraft(a, data, 1);
     if (offset % 20 === 0) result.push({ p: { ...a.position }, alt: a.altitudeFt });
   }
   return result;

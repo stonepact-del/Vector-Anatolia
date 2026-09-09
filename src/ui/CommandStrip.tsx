@@ -27,24 +27,25 @@ export function CommandStrip({
         <strong>{a.callsign}</strong>
       </div>
       <div className="command-buttons">
-        {a.controlState === 'INBOUND' && (
+        {a.controlState === 'HANDOFF_OFFERED' && (
           <button className="primary" onClick={() => issue('ACCEPT')}>
             ACCEPT
           </button>
         )}
-        {a.owner && a.identification !== 'IDENTIFIED' && (
+        {a.owner && a.identification !== 'IDENTIFIED' && a.controlState === 'INITIAL_CONTACT' && (
           <button onClick={() => issue('IDENTIFY')}>IDENTIFY</button>
         )}
-        {['LEVEL', 'DIRECT', 'HEADING', 'SPEED', 'TRANSFER'].map((tab) => (
-          <button
-            key={tab}
-            className={commandTab === tab ? 'active' : ''}
-            onClick={() => setCommandTab(commandTab === tab ? '' : tab)}
-          >
-            {tab}
-            <span>⌃</span>
-          </button>
-        ))}
+        {a.identification === 'IDENTIFIED' &&
+          ['LEVEL', 'DIRECT', 'HEADING', 'SPEED', 'TRANSFER'].map((tab) => (
+            <button
+              key={tab}
+              className={commandTab === tab ? 'active' : ''}
+              onClick={() => setCommandTab(commandTab === tab ? '' : tab)}
+            >
+              {tab}
+              <span>⌃</span>
+            </button>
+          ))}
         {a.navigationMode === 'HEADING' && (
           <button
             title={unavailable('RESUME') ?? ''}
@@ -54,13 +55,21 @@ export function CommandStrip({
             RESUME NAV
           </button>
         )}
-        {a.controlState === 'TRANSFER_INITIATED' && (
+        {a.controlState === 'TRANSFER_ACCEPTED' && (
           <button className="primary" onClick={() => issue('CONTACT')}>
             CONTACT
           </button>
         )}
         {a.emergency.kind !== 'NONE' && !a.emergency.acknowledged && (
           <button onClick={() => issue('ACKNOWLEDGE')}>ACKNOWLEDGE</button>
+        )}
+        {a.controlState === 'REQUEST_PENDING' && (
+          <>
+            <button className="primary" onClick={() => issue('APPROVE')}>
+              APPROVE REQUEST
+            </button>
+            <button onClick={() => issue('DENY')}>DENY</button>
+          </>
         )}
       </div>
       <button className="text-button" onClick={onWhy}>

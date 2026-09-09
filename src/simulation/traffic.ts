@@ -14,15 +14,14 @@ export function spawn(s: SimulationState, initial = false) {
     flows = dataset.trafficFlows,
     aircraftTypes = dataset.aircraftTypes;
   const index = s.spawned++;
-  const flowIndex =
-    s.scenario.id === 'istanbul'
-      ? 5
-      : s.scenario.id === 'summer'
-        ? 6
-        : s.scenario.fra
-          ? 8
-          : Math.floor(random(s) * flows.length);
-  const flow = flows[flowIndex % flows.length];
+  const pressure = flows.map(
+    (flow) => s.trafficDemand?.flowPressure.find((p) => p.flowId === flow.id)?.value ?? flow.weight,
+  );
+  let draw = random(s) * pressure.reduce((sum, value) => sum + value, 0),
+    flowIndex = 0;
+  while (flowIndex < pressure.length - 1 && draw > pressure[flowIndex])
+    draw -= pressure[flowIndex++];
+  const flow = flows[flowIndex];
   let route = [...flow.routes[0]];
   if (random(s) > 0.5) route.reverse();
   const type = aircraftTypes[index < 2 ? index : Math.floor(random(s) * aircraftTypes.length)];
@@ -31,6 +30,7 @@ export function spawn(s: SimulationState, initial = false) {
     p.category === 'TURBOPROP'
       ? 23000
       : [31000, 33000, 35000, 37000, 39000][Math.floor(random(s) * 5)];
+  const requestedLevel = Math.min(p.ceilingFt, level + (index % 4 === 0 ? 2000 : 0));
   let start = dataset.waypoints.find((w) => w.id === route[0])!;
   let nextWaypoint = 1;
   let position = { x: start.x, y: start.y };
@@ -52,10 +52,28 @@ export function spawn(s: SimulationState, initial = false) {
   const sector = sectorAt(position, dataset.sectors)?.id ?? dataset.simulation.initialSector;
   const heading = bearing(position, target);
   const controlled = s.combinedSectors.includes(sector);
+  const operators = [
+    'THY',
+    'PGT',
+    'SXS',
+    'QTR',
+    'UAE',
+    'DLH',
+    'BAW',
+    'FDB',
+    'AFR',
+    'KLM',
+    'SWR',
+    'LOT',
+    'ROT',
+    'ITY',
+    'SVA',
+    'IRA',
+  ];
   let callsign =
-    ['THY', 'PGT', 'SXS', 'QTR', 'UAE', 'DLH', 'BAW', 'FDB'][index % 8] +
+    operators[index % operators.length] +
     String(100 + Math.floor(random(s) * 899)) +
-    (index % 3 === 0 ? 'A' : '');
+    (index % 5 === 0 ? String.fromCharCode(65 + ((index + Math.floor(random(s) * 20)) % 26)) : '');
   if (s.aircraft.some((a) => a.callsign === callsign)) callsign += String(index);
   const id = `AC${String(index).padStart(5, '0')}`;
   const a: Aircraft = {
@@ -65,7 +83,7 @@ export function spawn(s: SimulationState, initial = false) {
     position,
     altitudeFt: level,
     clearedAltitudeFt: level,
-    requestedAltitudeFt: level,
+    requestedAltitudeFt: requestedLevel,
     headingDeg: heading,
     trackDeg: heading,
     assignedHeadingDeg: null,
@@ -86,7 +104,7 @@ export function spawn(s: SimulationState, initial = false) {
         waypoints: route,
         legs: route.slice(1).map((to, i) => ({ from: route[i], to, kind: 'AIRWAY' })),
       },
-      requestedCruiseFt: level,
+      requestedCruiseFt: requestedLevel,
       assignedCruiseFt: level,
       cruiseSpeed: p.cruiseTas,
       rvsm: p.category !== 'TURBOPROP',
@@ -98,7 +116,7 @@ export function spawn(s: SimulationState, initial = false) {
     owner: controlled && index !== 0 ? sector : null,
     sectorId: sector,
     nextSector: null,
-    controlState: controlled ? 'INBOUND' : 'CONTROLLED',
+    controlState: controlled ? 'HANDOFF_OFFERED' : 'CONTROLLED',
     identification: controlled ? 'CORRELATED' : 'IDENTIFIED',
     communication: controlled ? 'PENDING' : 'OTHER',
     handoff: null,
@@ -114,7 +132,14 @@ export function spawn(s: SimulationState, initial = false) {
     boundaryViolation: false,
     lastCommunicationTick: 0,
   };
-  if (controlled && index !== 0) {
+  if (a.controlState === 'HANDOFF_OFFERED')
+    a.handoff = {
+      from: dataset.sectors.find((x) => x.id === sector)?.adjacent[0] ?? null,
+      to: sector,
+      state: 'REQUESTED',
+      initiatedTick: s.clock.tick,
+    };
+  if (initial && controlled && index !== 0) {
     a.controlState = 'CONTROLLED';
     a.identification = 'IDENTIFIED';
     a.communication = 'CONTACT';
@@ -152,5 +177,13 @@ export function spawn(s: SimulationState, initial = false) {
     a.flightPlan.assignedCruiseFt = a.clearedAltitudeFt;
   }
   s.aircraft.push(a);
-  if (!initial) event(s, 'INBOUND', `${callsign} entered the network.`, id);
+  if (!initial)
+    event(
+      s,
+      'INBOUND',
+      a.controlState === 'HANDOFF_OFFERED'
+        ? `${callsign} offered inbound by ${a.handoff?.from ?? 'adjacent sector'}.`
+        : `${callsign} entered the modeled network under adjacent-sector control.`,
+      id,
+    );
 }

@@ -1,4 +1,4 @@
-import { rules } from '../data';
+import { dataset, rules } from '../data';
 import { disclaimer } from './strings';
 export function Fidelity({ state, onBack }: { state: unknown; onBack: () => void }) {
   return (
@@ -22,9 +22,18 @@ export function Fidelity({ state, onBack }: { state: unknown; onBack: () => void
       </div>
       <p>
         No current operational rule is claimed VERIFIED in this release. The published source
-        snapshots below inform the modeled implementation. All geometry, fixes, schedules and
-        aircraft performance are synthetic.
+        snapshots below inform the modeled implementation. Sector/fix, schedule and aircraft
+        performance data are synthetic. The generalized geographic base is separately sourced.
       </p>
+      <a
+        className="geographic-source"
+        href="https://www.naturalearthdata.com/about/terms-of-use/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        GEOGRAPHIC BASE · {dataset.simulation.geographicSource.name}
+        <b>VERIFIED PUBLIC DOMAIN ↗</b>
+      </a>
       <div className="source-list">
         {rules
           .filter((r) => r.authority !== 'ANKARA CONTROL')

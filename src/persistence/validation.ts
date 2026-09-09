@@ -34,6 +34,8 @@ const commandKinds = new Set([
   'TRANSFER',
   'CONTACT',
   'ACKNOWLEDGE',
+  'APPROVE',
+  'DENY',
 ]);
 function validateActions(actions: RecordedAction[], maxTick: number) {
   let prior = -1;
@@ -83,19 +85,36 @@ function validateState(s: SimulationState) {
     'events',
     'commands',
     'conflicts',
+    'interactions',
     'alerts',
     'weather',
     'activeLosses',
     'activeAlerts',
     'activePredictions',
+    'transmissions',
+    'pilotRequests',
+    'adjacentSectors',
+    'attention',
   ] as const)
     if (!Array.isArray(s[key])) throw Error(`Replay ${key} are invalid.`);
   if (
     !Object.values(s.metrics).every(Number.isFinite) ||
     !Number.isFinite(s.clock.startUtcMs) ||
-    s.clock.stepSec !== 0.25
+    s.clock.stepSec !== 0.25 ||
+    !Number.isFinite(s.frequencyLoad) ||
+    !Number.isInteger(s.nextTransmissionId) ||
+    !Number.isInteger(s.nextRequestId) ||
+    !Number.isInteger(s.nextSpawnTick) ||
+    typeof s.challengeCode !== 'string'
   )
     throw Error('Replay clock or metrics are invalid.');
+  if (
+    !s.trafficDemand ||
+    !s.trafficDemand.profile ||
+    !Array.isArray(s.trafficDemand.profile.waves) ||
+    !Array.isArray(s.trafficDemand.flowPressure)
+  )
+    throw Error('Replay traffic demand state is invalid.');
   for (const a of s.aircraft) {
     if (
       !a ||
@@ -118,6 +137,10 @@ function validateState(s: SimulationState) {
   assertState(s);
 }
 export function validateReplay(value: unknown): asserts value is Replay {
+  if (record(value) && typeof value.engineVersion === 'string' && value.engineVersion !== '2.0.0')
+    throw Error(
+      `Replay engine ${value.engineVersion} is incompatible with Living Airspace 2.0. Export or remove the older recording; it will not be replayed incorrectly.`,
+    );
   if (
     !record(value) ||
     value.format !== 1 ||

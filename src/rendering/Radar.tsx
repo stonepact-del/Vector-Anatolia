@@ -202,37 +202,12 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
           geometry.clear();
           dynamic.clear();
           for (const l of labels.values()) l.visible = false;
-          // Original cartographic silhouette: deliberately schematic and not an aviation chart.
-          geometry
-            .moveTo(0, 130)
-            .lineTo(42, 72)
-            .lineTo(145, 35)
-            .lineTo(230, 45)
-            .lineTo(307, 30)
-            .lineTo(390, 53)
-            .lineTo(480, 36)
-            .lineTo(570, 50)
-            .lineTo(667, 34)
-            .lineTo(754, 75)
-            .lineTo(795, 136)
-            .lineTo(775, 225)
-            .lineTo(800, 302)
-            .lineTo(726, 338)
-            .lineTo(655, 326)
-            .lineTo(579, 346)
-            .lineTo(491, 328)
-            .lineTo(411, 363)
-            .lineTo(340, 341)
-            .lineTo(285, 360)
-            .lineTo(220, 317)
-            .lineTo(163, 330)
-            .lineTo(104, 290)
-            .lineTo(57, 309)
-            .lineTo(30, 228)
-            .lineTo(0, 205)
-            .closePath()
-            .fill({ color: 0x122229, alpha: 0.65 })
-            .stroke({ color: 0x304852, width: 1 / scale });
+          // Public-domain Natural Earth geographic base, projected locally into the NM workspace.
+          for (const outline of dataset.simulation.geographicOutline)
+            geometry
+              .poly(outline.flatMap((p) => [p.x, p.y]))
+              .fill({ color: 0x122229, alpha: 0.72 })
+              .stroke({ color: 0x44616b, width: 1.1 / scale, alpha: 0.9 });
           for (let x = 0; x <= 800; x += 50)
             geometry
               .moveTo(x, 0)
@@ -247,11 +222,11 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
             const owned = s.combinedSectors.includes(sector.id);
             geometry
               .poly(sector.polygon.flatMap((p) => [p.x, p.y]))
-              .fill({ color: owned ? 0x335c63 : 0x14242c, alpha: owned ? 0.12 : 0.025 })
+              .fill({ color: owned ? 0x335c63 : 0x14242c, alpha: owned ? 0.065 : 0.012 })
               .stroke({
                 color: owned ? 0x6e9b9e : 0x38515f,
                 width: (owned ? 1.2 : 0.7) / scale,
-                alpha: owned ? 0.9 : 0.6,
+                alpha: owned ? 0.72 : 0.32,
               });
             label(
               `SEC${sector.id}`,
@@ -268,7 +243,7 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
               ).length;
               label(
                 `NET${sector.id}`,
-                `${String(ac.length).padStart(2, '0')} TRAFFIC\n${conflicts} CONFLICTS\n${ac.filter((a) => a.controlState === 'INBOUND').length} INBOUND`,
+                `${String(ac.length).padStart(2, '0')} TRAFFIC\n${conflicts} CONFLICTS\n${ac.filter((a) => ['APPROACHING_SECTOR', 'HANDOFF_OFFERED', 'AWAITING_INITIAL_CONTACT'].includes(a.controlState)).length} INBOUND\n${s.adjacentSectors.find((x) => x.sectorId === sector.id)?.frequencyLoad ?? 0}% FREQ`,
                 sector.center.x - 35,
                 sector.center.y - 20,
                 conflicts ? 0xe9ae8e : 0xacc9ca,
@@ -276,6 +251,24 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
               );
             }
           }
+          for (const outline of dataset.simulation.geographicOutline)
+            geometry
+              .poly(outline.flatMap((p) => [p.x, p.y]))
+              .stroke({ color: 0x557681, width: 1.15 / scale, alpha: 0.95 });
+          if (!network)
+            for (const landmark of dataset.simulation.landmarks) {
+              geometry
+                .circle(landmark.position.x, landmark.position.y, 1.6 / scale)
+                .fill({ color: 0x64808a, alpha: 0.8 });
+              label(
+                `CITY${landmark.id}`,
+                landmark.name,
+                landmark.position.x + 5,
+                landmark.position.y - 4,
+                0x496975,
+                7 / scale,
+              );
+            }
           for (const cell of s.weather) {
             geometry
               .ellipse(cell.x, cell.y, cell.radiusNm, cell.radiusNm * 0.75)
@@ -308,6 +301,18 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
               }
             }
           }
+          for (const interaction of s.interactions.filter((item) =>
+            item.aircraftIds.includes(selected ?? ''),
+          )) {
+            const [left, right] = interaction.aircraftIds.map((id) =>
+              s.aircraft.find((a) => a.id === id),
+            );
+            if (left && right)
+              dynamic
+                .moveTo(left.position.x, left.position.y)
+                .lineTo(right.position.x, right.position.y)
+                .stroke({ color: 0x718d94, alpha: 0.35, width: 0.6 / scale });
+          }
           for (const c of s.conflicts.filter((c) => c.aircraftIds.includes(selected ?? ''))) {
             dynamic
               .circle(c.point.x, c.point.y, 5 / scale)
@@ -335,7 +340,12 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
                 ? 0xbce9d7
                 : abnormal
                   ? 0xe8bd80
-                  : a.controlState === 'INBOUND'
+                  : [
+                        'APPROACHING_SECTOR',
+                        'HANDOFF_OFFERED',
+                        'AWAITING_INITIAL_CONTACT',
+                        'INITIAL_CONTACT',
+                      ].includes(a.controlState)
                     ? 0xe3c98f
                     : owned
                       ? 0xa6c7ce
@@ -383,11 +393,21 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
                 ? ' !'
                 : abnormal
                   ? ' △'
-                  : a.controlState === 'INBOUND'
-                    ? ' IN'
-                    : a.controlState === 'TRANSFER_INITIATED'
-                      ? ' XFR'
-                      : '';
+                  : a.controlState === 'APPROACHING_SECTOR'
+                    ? ' AP'
+                    : a.controlState === 'HANDOFF_OFFERED'
+                      ? ' HO'
+                      : a.controlState === 'INITIAL_CONTACT'
+                        ? ' IC'
+                        : a.controlState === 'REQUEST_PENDING'
+                          ? ' RQ'
+                          : [
+                                'OUTBOUND_COORDINATION',
+                                'TRANSFER_ACCEPTED',
+                                'FREQUENCY_CHANGE',
+                              ].includes(a.controlState)
+                            ? ' XFR'
+                            : '';
               label(
                 a.id,
                 `${a.callsign}${status}\n${Math.round(a.altitudeFt / 100)
@@ -435,9 +455,9 @@ export function Radar({ state, selected, onSelect, network, showLabels }: Props)
         </div>
       )}
       <div className="radar-coordinate">
-        SCHEMATIC ANATOLIA / NM GRID
+        TÜRKİYE GEOGRAPHIC BASE / NM GRID
         <br />
-        <span>ORIGINAL SIMULATION DATA · NOT FOR NAVIGATION</span>
+        <span>NATURAL EARTH PUBLIC DOMAIN · MODELED SECTORS · NOT FOR NAVIGATION</span>
       </div>
       <div className="zoom-controls">
         <button aria-label="Zoom in" onClick={() => zoomAction.current(1.2)}>
